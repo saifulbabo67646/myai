@@ -1346,6 +1346,15 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
       merged[id] = [...existing, { type: "api", label: t("providers.api_key_label") }];
     }
 
+    // A disabled provider is dropped from the engine's provider and auth-method
+    // lists, so a disconnected built-in (OpenCode Zen) would have no way back
+    // in. Offer it as an API-key entry; the policy pass below still removes ids
+    // org policy blocks, and connecting clears the disabled flag.
+    for (const id of normalizeDisabledProviders(options.disabledProviders())) {
+      if (merged[id]?.length) continue;
+      merged[id] = [{ type: "api", label: t("providers.api_key_label") }];
+    }
+
     const availableProvidersById = new Map((availableProviders ?? []).map((provider) => [provider.id, provider]));
     for (const [id, providerMethods] of Object.entries(merged)) {
       if (
@@ -1582,9 +1591,8 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
     };
 
     try {
-      if (resolved.toLowerCase() === DESKTOP_RESTRICTION_OPENCODE_PROVIDER_ID) {
-        await ensureProjectProviderDisabledState(resolved, false);
-      }
+      // Connecting re-enables the provider: no-ops unless it is disabled.
+      await ensureProjectProviderDisabledState(resolved, false);
       const trimmedCode = code?.trim();
       const result = await c.provider.oauth.callback({
         providerID: resolved,
@@ -1635,9 +1643,8 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
 
     setStateField("providerAuthBusy", true);
     try {
-      if (providerId.trim().toLowerCase() === DESKTOP_RESTRICTION_OPENCODE_PROVIDER_ID) {
-        await ensureProjectProviderDisabledState(providerId, false);
-      }
+      // Connecting re-enables the provider: no-ops unless it is disabled.
+      await ensureProjectProviderDisabledState(providerId, false);
       await c.auth.set({ providerID: providerId, auth: { type: "api", key: trimmed } });
       await refreshProviders({ dispose: true });
       return `${t("status.connected")} ${providerId}`;

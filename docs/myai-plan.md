@@ -400,7 +400,11 @@ not a regression; no WP fixes them opportunistically.
   `PROVENANCE.md`, `REUSE.toml`, `docs/myai-plan.md`, `scripts/strip-ee.mjs`,
   `evals/specs/myai-ee-free-boundary.test.ts`, `apps/desktop/electron/desktop-distribution.mjs`,
   `apps/app/src/app/lib/den.ts` (branding strings), root `package.json` (pruned scripts),
-  `pnpm-lock.yaml` (never merge — regenerate with `pnpm install`).
+  `pnpm-lock.yaml` (never merge — regenerate with `pnpm install`), and
+  `apps/app/src/react-app/domains/connections/provider-auth/store.ts` +
+  `apps/app/tests/provider-auth-methods.test.ts` — the ported disabled-provider reconnect fix
+  (DEC-2) lands in a region upstream reworked via #4357/#4358; after merging, re-check the fix
+  still holds and re-run `bun test tests/provider-auth-methods.test.ts` (7/7 green pre-sync).
 - Upstream will reintroduce EE coupling (new `dev:den*` scripts, workflows, eval specs, den
   files): extend `scripts/strip-ee.mjs` patterns and let it remove them; never hand-delete.
 - Exit (all pasted into the PR): guard spec green; `pnpm typecheck` green; `pnpm build` green;
@@ -486,8 +490,11 @@ not a regression; no WP fixes them opportunistically.
 **WP-8 — Housekeeping & human decisions (owner: human; agents may execute decided items).**
 - **DEC-1 (blocks WP-4):** license for myai-authored code — MIT (simplest, keeps repo uniform)
   vs proprietary carve-out (requires `LICENSE` + `REUSE.toml` amendment BEFORE writing code).
-- **DEC-2:** port or drop the uncommitted `provider-auth/store.ts` WIP sitting in the tracking
-  fork's `branding` working tree.
+- **DEC-2: ✅ resolved 2026-09-16 — ported.** The tracking fork's uncommitted
+  `provider-auth/store.ts` fix (disabled providers stay offerable so they can be reconnected;
+  any connect clears the disabled flag) was verified green (7/7 `bun test`), confirmed absent
+  from `upstream/dev`, and merged into `main`; the fork's working tree was reset. WP-1 must
+  re-verify it after the merge (see WP-1 conflict hotspots).
 - Port `spec-impact.test.ts` with MIT fixture paths (deleted at strip; tool itself remains).
 - Clean dormant Den/Daytona eval infra (`evals/packages/{env,hosts,testkit}` den modules,
   `.devcontainer/start-daytona-server.sh`, allow-list in `strip-ee.mjs`) once WP-4 provides the
