@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { createClient } from "../src/app/lib/opencode";
+import type { DesktopAppRestrictionChecker } from "../src/app/cloud/desktop-app-restrictions";
 import type { ProviderListItem, WorkspaceDisplay } from "../src/app/types";
 import { createProviderAuthStore } from "../src/react-app/domains/connections/provider-auth/store";
 
@@ -51,7 +52,14 @@ function installProviderAuthFetch() {
   });
 }
 
-function createTestStore(workerType: "local" | "remote") {
+function createTestStore(
+  workerType: "local" | "remote",
+  overrides?: {
+    disabledProviders?: string[];
+    checkDesktopAppRestriction?: DesktopAppRestrictionChecker;
+    setDisabledProviders?: (providers: string[]) => void;
+  },
+) {
   const providers: ProviderListItem[] = [
     {
       id: "openai",
@@ -74,8 +82,8 @@ function createTestStore(workerType: "local" | "remote") {
     providers: () => providers,
     providerDefaults: () => ({}),
     providerConnectedIds: () => [],
-    disabledProviders: () => [],
-    checkDesktopAppRestriction: () => false,
+    disabledProviders: () => overrides?.disabledProviders ?? [],
+    checkDesktopAppRestriction: overrides?.checkDesktopAppRestriction ?? (() => false),
     selectedWorkspaceDisplay: () => workspace,
     providerBaseUrl: () => "https://engine.example",
     selectedWorkspaceRoot: () => workspace.path,
@@ -90,7 +98,7 @@ function createTestStore(workerType: "local" | "remote") {
     setProviders: () => undefined,
     setProviderDefaults: () => undefined,
     setProviderConnectedIds: () => undefined,
-    setDisabledProviders: () => undefined,
+    setDisabledProviders: overrides?.setDisabledProviders ?? (() => undefined),
     markOpencodeConfigReloadRequired: () => undefined,
   });
 }
@@ -144,4 +152,77 @@ describe("OpenAI provider auth methods", () => {
       { type: "api", label: "API key" },
     ]);
   });
+});
+
+describe("disabled provider auth methods", () => {
+  test("a disconnected provider stays offerable so it can be reconnected", async () => {
+    installWindow({
+      origin: "http://localhost:3000",
+      electronInfo: { baseUrl: "http://localhost:8787", ownerToken: "owner-token" },
+    });
+    installProviderAuthFetch();
+    const store = createTestStore("local", { disabledProviders: ["opencode"] });
+
+    await store.openProviderAuthModal();
+
+    expect(store.getSnapshot().providerAuthMethods.opencode).toEqual([
+      { type: "api", label: "API key" },
+    ]);
+  });
+
+  test("org policy still hides a disabled provider it blocks", async () => {
+    installWindow({
+      origin: "http://localhost:3000",
+      electronInfo: { baseUrl: "http://localhost:8787", ownerToken: "owner-token" },
+    });
+    installProviderAuthFetch();
+    const store = createTestStore("local", {
+      disabledProviders: ["opencode"],
+      checkDesktopAppRestriction: ({ restriction }) => restriction === "allowZenModel",
+    });
+
+    await store.openProviderAuthModal();
+
+    expect(store.getSnapshot().providerAuthMethods.opencode).toBeUndefined();
+  });
+});
+
+describe("reconnecting a disabled provider", () => {
+  // "opencode" is the provider Disconnect disables; any other id can only be
+  // disabled by hand-editing the config, and must be just as reconnectable.
+  for (const providerId of ["opencode", "anthropic"]) {
+    test(`saving an API key drops ${providerId} from the disabled list`, async () => {
+      installWindow({
+        origin: "http://localhost:3000",
+        electronInfo: { baseUrl: "http://localhost:8787", ownerToken: "owner-token" },
+      });
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        value: async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = input instanceof Request ? input : new Request(input, init);
+          const url = new URL(request.url);
+          const body = (() => {
+            if (url.pathname === "/config") return { disabled_providers: [providerId] };
+            if (url.pathname === "/config/providers") return { all: [], connected: [], default: {} };
+            if (url.pathname === "/global/health") return { healthy: true };
+            return {};
+          })();
+          return new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+
+      const disabledUpdates: string[][] = [];
+      const store = createTestStore("local", {
+        disabledProviders: [providerId],
+        setDisabledProviders: (providers) => disabledUpdates.push(providers),
+      });
+
+      await store.submitProviderApiKey(providerId, "provider-api-key");
+
+      expect(disabledUpdates[0]).toEqual([]);
+    });
+  }
 });
