@@ -5,16 +5,29 @@ import {
   parseExtensionsPath,
   parseSettingsPath,
   settingsDeveloperModePaletteItem,
-  settingsReturnRoute,
   settingsPathForRoute,
 } from "../src/react-app/shell/settings-route";
 import {
   getSettingsTabLabel,
+  getGlobalSettingsTabs,
   getWorkspaceSettingsTabs,
   isSettingsTabActive,
 } from "../src/react-app/domains/settings/shell/settings-page";
+import { settingsNavigationFromPathname, settingsReturnRoute } from "../src/react-app/shell/workspace-routes";
 
 describe("settings route parsing", () => {
+  test("opens Ollama directly below AI Providers without entering Library", () => {
+    const tabs = getGlobalSettingsTabs(false, { autoUpdate: false });
+    expect(tabs[tabs.indexOf("ai") + 1]).toBe("ollama");
+    expect(getSettingsTabLabel("ollama")).toBe("Ollama");
+    for (const pathname of ["/settings/ollama", "/workspace/workspace_1/settings/ollama"]) {
+      const route = parseSettingsPath(pathname);
+      expect(route).toEqual({ tab: "ollama", redirectPath: null });
+      expect(settingsPathForRoute(route)).toBe("ollama");
+      expect(isSettingsTabActive(route.tab, "extensions")).toBe(false);
+    }
+  });
+
   test("parses the first-class Extensions route for direct workspace navigation and reloads", () => {
     const pathname = "/workspace/workspace_1/extensions";
     const route = parseExtensionsPath(pathname);
@@ -115,6 +128,17 @@ describe("settings navigation", () => {
   test("does not carry a session into a different selected workspace", () => {
     expect(settingsReturnRoute("workspace_2", "workspace_1", "session_1")).toBe(
       "/workspace/workspace_2/session",
+    );
+  });
+
+  test("native menu / agent settings entry round-trips back to the open session", () => {
+    // Regression: Cmd+, and settings.panel.open used to enter Settings via
+    // the global /settings route with no navigation state, so closing
+    // Settings dropped the user onto the workspace's empty "new task" state.
+    const entry = settingsNavigationFromPathname("/workspace/workspace_1/session/session_1", "general");
+    expect(entry.to).toBe("/workspace/workspace_1/settings/general");
+    expect(settingsReturnRoute("workspace_1", entry.state.workspaceId, entry.state.sessionId)).toBe(
+      "/workspace/workspace_1/session/session_1",
     );
   });
 

@@ -7,8 +7,13 @@ export const MAX_SESSIONS_PREVIEW = 6;
 
 export type SessionListItem = WorkspaceSessionGroup["sessions"][number];
 export type FlattenedSessionRow = { session: SessionListItem };
+type ArchivedSession = SessionListItem & { time: { archived: number } };
+export type GlobalArchivedSessionEntry = {
+  group: WorkspaceSessionGroup;
+  session: ArchivedSession;
+};
 
-export const isSessionArchived = (session: SessionListItem): boolean =>
+export const isSessionArchived = (session: SessionListItem): session is ArchivedSession =>
   typeof session.time?.archived === "number" && session.time.archived > 0;
 
 /** Active agent work shown as the left-lane loader (never a completion / unread state). */
@@ -45,23 +50,74 @@ const normalizeSessionParentID = (session: SessionListItem) => {
   return parentID || "";
 };
 
-export const getRootSessions = (sessions: WorkspaceSessionGroup["sessions"]) => {
-  const byID = new Set(sessions.map((session) => session.id));
-  return sessions.filter((session) => {
-    const parentID = normalizeSessionParentID(session);
-    return !parentID || !byID.has(parentID);
-  });
+/**
+ * A session with a parentID is a sub-agent child, whether or not its parent is
+ * in the loaded page (the parent may be archived, deleted, or beyond the list
+ * limit). Children are only reached from the task card in their parent.
+ */
+export const getRootSessions = (sessions: WorkspaceSessionGroup["sessions"]) =>
+  sessions.filter((session) => !normalizeSessionParentID(session));
+
+/**
+ * Return every descendant of a session in stable session-list order. The
+ * visited set keeps malformed cyclic parent data from looping forever.
+ */
+export const getSessionDescendantIds = (
+  sessions: WorkspaceSessionGroup["sessions"],
+  sessionId: string,
+): string[] => {
+  const root = sessionId.trim();
+  if (!root) return [];
+
+  const descendants: string[] = [];
+  const visited = new Set([root]);
+  let parents = new Set([root]);
+
+  while (parents.size > 0) {
+    const nextParents = new Set<string>();
+    for (const session of sessions) {
+      const id = session.id.trim();
+      if (!id || visited.has(id)) continue;
+      const parentID = normalizeSessionParentID(session);
+      if (!parents.has(parentID)) continue;
+      visited.add(id);
+      descendants.push(id);
+      nextParents.add(id);
+    }
+    parents = nextParents;
+  }
+
+  return descendants;
 };
 
 /** Split sessions into active vs. archived. Archived sessions live in their own section. */
 export const partitionArchivedSessions = (sessions: WorkspaceSessionGroup["sessions"]) => {
   const active: SessionListItem[] = [];
-  const archived: SessionListItem[] = [];
+  const archived: ArchivedSession[] = [];
   for (const session of sessions) {
-    (isSessionArchived(session) ? archived : active).push(session);
+    if (isSessionArchived(session)) archived.push(session);
+    else active.push(session);
   }
   return { active, archived };
 };
+
+export function buildGlobalArchivedSessions(groups: WorkspaceSessionGroup[]): GlobalArchivedSessionEntry[] {
+  const entries: GlobalArchivedSessionEntry[] = [];
+  for (const group of groups) {
+    for (const session of partitionArchivedSessions(group.sessions).archived) {
+      entries.push({ group, session });
+    }
+  }
+  return entries.sort((a, b) => {
+    if (a.session.time.archived !== b.session.time.archived) {
+      return b.session.time.archived - a.session.time.archived;
+    }
+    if (a.group.workspace.id !== b.group.workspace.id) {
+      return a.group.workspace.id < b.group.workspace.id ? -1 : 1;
+    }
+    return a.session.id < b.session.id ? -1 : a.session.id > b.session.id ? 1 : 0;
+  });
+}
 
 /**
  * Order root sessions: pinned first, then manual order, then server recency.

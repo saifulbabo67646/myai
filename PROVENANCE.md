@@ -10,8 +10,8 @@ every upstream sync (see docs/myai-plan.md §2).
 | Import method | `git archive` snapshot (no upstream git history imported; this repo's history starts EE-free) |
 | Import date | 2026-09-16 |
 | Snapshot source | tracking fork `branding` branch @ `a94ad71e982ead3c08f1dcb1795ddebef7b8151d` |
-| UPSTREAM_BASE | `03664d1f04b26a2e8539e33319840baa9a87a5a9` (upstream/dev commit the fork was last synced to) |
-| Upstream tip at import | `fa97054588a0ab12519fafc50cbea6d510f42130` (catch-up pending, ~670 commits) |
+| UPSTREAM_BASE | `391d794d2df522ae44410e33a0037c3730077e22` (upstream/dev commit the fork was last synced to; WP-1 catch-up sync 2026-09-16) |
+| Upstream tip at import | `fa97054588a0ab12519fafc50cbea6d510f42130` (caught up by WP-1; see UPSTREAM_BASE) |
 | EE strip tool | `scripts/strip-ee.mjs` (run at import; must be re-run after every sync) |
 | Tracking fork | `/Users/saiful/Desktop/work/openwork` (private; `dev` mirrors `upstream/dev`) |
 | Tracking fork remotes | upstream `https://github.com/different-ai/openwork.git` · origin `https://github.com/saifulbabo67646/myai-old.git` (renamed 2026-09-16; to be archived) |

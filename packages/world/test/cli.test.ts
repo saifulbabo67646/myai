@@ -1,248 +1,271 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { main, parseWorldArgs } from "../src/cli.ts";
-import type { WorldRuntimeAdapter } from "../src/cli.ts";
+import { discoverWorlds, resolveWorldScript } from "../src/loader.ts";
 
-test("world arguments accept path sources and compatibility lifecycle flags", () => {
-  assert.deepEqual(parseWorldArgs(["up", "./worlds/dev-headless.ts"]), {
-    kind: "up",
-    source: "./worlds/dev-headless.ts",
+test("world arguments expose only script lifecycle flags and forward arguments after --", () => {
+  assert.deepEqual(
+    parseWorldArgs([
+      "up",
+      "./worlds/dev-headless.ts",
+      "--detach",
+      "--timeout",
+      "5000",
+      "--stage",
+      "feature one",
+      "--place",
+      "daytona",
+      "--",
+      "--replace",
+      "value",
+    ]),
+    {
+      kind: "up",
+      source: "./worlds/dev-headless.ts",
+      detach: true,
+      timeoutMs: 5000,
+      stage: "feature-one",
+      place: "daytona",
+      args: ["--replace", "value"],
+    },
+  );
+
+  const foregroundTimeout = parseWorldArgs(["up", "dev-headless", "--timeout", "5000"]);
+  assert.equal(foregroundTimeout.kind, "help");
+  if (foregroundTimeout.kind !== "help") throw new Error("expected help");
+  assert.match(foregroundTimeout.error ?? "", /only with --detach/);
+
+  const oldFlag = parseWorldArgs(["up", "dev-headless", "--keep"]);
+  assert.equal(oldFlag.kind, "help");
+  if (oldFlag.kind !== "help") throw new Error("expected help");
+  assert.match(oldFlag.error ?? "", /Unknown world CLI option "--keep"/);
+
+  const oldCommand = parseWorldArgs(["resume", "dev-headless"]);
+  assert.equal(oldCommand.kind, "help");
+  if (oldCommand.kind !== "help") throw new Error("expected help");
+  assert.match(oldCommand.error ?? "", /Unknown command "resume"/);
+
+  assert.deepEqual(parseWorldArgs(["plan", "dev-headless", "--stage", "preview"]), {
+    kind: "plan",
+    source: "dev-headless",
+    stage: "preview",
   });
-  assert.deepEqual(parseWorldArgs(["up", "solo", "--name", "demo", "--keep"]), {
-    kind: "up",
-    source: "solo",
-    name: "demo",
-    keep: true,
+  assert.deepEqual(parseWorldArgs(["down", "dev-headless", "--stage", "preview"]), {
+    kind: "down",
+    name: "dev-headless",
+    stage: "preview",
   });
-  assert.deepEqual(parseWorldArgs(["up", "headless-prod-live", "--allow-shared-state", "--replace"]), {
-    kind: "up",
-    source: "headless-prod-live",
-    allowSharedState: true,
-    replace: true,
+  assert.deepEqual(parseWorldArgs(["down", "dev-headless", "--purge"]), {
+    kind: "down",
+    name: "dev-headless",
+    purge: true,
   });
+  assert.deepEqual(parseWorldArgs(["down", "dev-headless", "--stage", "preview", "--purge"]), {
+    kind: "down",
+    name: "dev-headless",
+    stage: "preview",
+    purge: true,
+  });
+  assert.deepEqual(parseWorldArgs(["down", "dev-headless", "--purge", "--stage", "preview"]), {
+    kind: "down",
+    name: "dev-headless",
+    stage: "preview",
+    purge: true,
+  });
+  assert.deepEqual(parseWorldArgs(["up", "dev-headless", "--plain"]), {
+    kind: "up",
+    source: "dev-headless",
+    plain: true,
+    args: [],
+  });
+  assert.deepEqual(parseWorldArgs(["attach", "dev-headless"]), {
+    kind: "attach",
+    name: "dev-headless",
+  });
+  assert.deepEqual(parseWorldArgs(["attach", "dev-headless", "--stage", "preview", "--plain"]), {
+    kind: "attach",
+    name: "dev-headless",
+    stage: "preview",
+    plain: true,
+  });
+  assert.deepEqual(parseWorldArgs(["outputs", "dev-headless"]), {
+    kind: "outputs",
+    name: "dev-headless",
+  });
+  assert.deepEqual(parseWorldArgs(["outputs", "dev-headless", "--stage", "preview", "--reveal", "--json"]), {
+    kind: "outputs",
+    name: "dev-headless",
+    stage: "preview",
+    reveal: true,
+    json: true,
+  });
+  const missingOutputsName = parseWorldArgs(["outputs"]);
+  assert.equal(missingOutputsName.kind, "help");
+  if (missingOutputsName.kind !== "help") throw new Error("expected help");
+  assert.match(missingOutputsName.error ?? "", /needs exactly one world name/);
+  const outputsPurge = parseWorldArgs(["outputs", "dev-headless", "--purge"]);
+  assert.equal(outputsPurge.kind, "help");
+  if (outputsPurge.kind !== "help") throw new Error("expected help");
+  assert.match(outputsPurge.error ?? "", /Unknown world CLI option "--purge"/);
+  const missingAttachName = parseWorldArgs(["attach", "--plain"]);
+  assert.equal(missingAttachName.kind, "help");
+  if (missingAttachName.kind !== "help") throw new Error("expected help");
+  assert.match(missingAttachName.error ?? "", /needs exactly one world name/);
+
+  const invalidPlace = parseWorldArgs(["up", "dev-headless", "--place", "remote"]);
+  assert.equal(invalidPlace.kind, "help");
+  if (invalidPlace.kind !== "help") throw new Error("expected help");
+  assert.match(invalidPlace.error ?? "", /local or daytona/);
+
+  const emptyStage = parseWorldArgs(["up", "dev-headless", "--stage", "---"]);
+  assert.equal(emptyStage.kind, "help");
+  if (emptyStage.kind !== "help") throw new Error("expected help");
+  assert.match(emptyStage.error ?? "", /non-empty stage value/);
+
+  const unknownPlanFlag = parseWorldArgs(["plan", "dev-headless", "--detach"]);
+  assert.equal(unknownPlanFlag.kind, "help");
+  if (unknownPlanFlag.kind !== "help") throw new Error("expected help");
+  assert.match(unknownPlanFlag.error ?? "", /Unknown world CLI option "--detach"/);
+
+  for (const args of [["up", "dev-headless", "--purge"], ["plan", "dev-headless", "--purge"]]) {
+    const result = parseWorldArgs(args);
+    assert.equal(result.kind, "help");
+    if (result.kind !== "help") throw new Error("expected help");
+    assert.match(result.error ?? "", /Unknown world CLI option "--purge"/);
+  }
 });
 
-test("path worlds use the filename name and their detached default", async () => {
-  const root = await mkdtemp(join(tmpdir(), "openwork-world-cli-"));
+test("discovery, resolution, list, and help classify scripts without importing them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openwork-world-cli-discovery-"));
   try {
     const worldsDirectory = join(root, "worlds");
+    const fixturePath = join(worldsDirectory, "throwing.ts");
     await mkdir(worldsDirectory);
-    const worldPath = join(worldsDirectory, "fixture-world.ts");
-    await writeFile(worldPath, `export default {
-      adapter: "fixture",
-      detached: true,
-      requiresSharedState: false,
-      topology: { value: "loaded" },
-    };\n`, "utf8");
-    let receivedName: string | undefined;
-    let detached = false;
-    let waited = false;
-    const adapter: WorldRuntimeAdapter = {
-      id: "fixture",
-      snapshotDirectory: join(root, "state"),
-      async start(received) {
-        receivedName = received.name;
-        return {
-          name: received.name ?? "missing",
-          lines: ["fixture up"],
-          async detach() { detached = true; },
-          async dispose() { throw new Error("detached worlds must not dispose"); },
-        };
-      },
-      async rebuild() { throw new Error("unused"); },
-      async resume() { throw new Error("unused"); },
-      summarize() { throw new Error("unused"); },
-    };
-    const lines: string[] = [];
-    const result = await main(["up", worldPath], {
+    await writeFile(fixturePath, 'throw new Error("must not import");\n', "utf8");
+
+    assert.deepEqual(await discoverWorlds(worldsDirectory), [{
+      kind: "script",
+      name: "throwing",
+      path: fixturePath,
+    }]);
+    for (const source of ["throwing", "throwing.ts", fixturePath]) {
+      assert.deepEqual(await resolveWorldScript(source, { cwd: root, worldsDirectory }), {
+        kind: "script",
+        name: "throwing",
+        path: fixturePath,
+      });
+    }
+
+    for (const command of [["list"], ["help"]]) {
+      const lines: string[] = [];
+      assert.equal(await main(command, {
+        cwd: root,
+        worldsDirectory,
+        print: (line) => lines.push(line),
+      }), 0);
+      assert.match(lines.join("\n"), /world scripts/i);
+      assert.match(lines.join("\n"), /throwing/);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preflight failures warn without blocking up and do not affect attach or plan", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openwork-world-cli-preflight-"));
+  const worldsDirectory = join(root, "worlds");
+  const receiptPath = join(root, "evals", "results", ".worlds", "scripts", "warned.json");
+  const holdUrl = new URL("../src/hold.ts", import.meta.url).href;
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown): void => { unhandledRejections.push(reason); };
+  process.on("unhandledRejection", onUnhandledRejection);
+  let checks = 0;
+  const failingCheck = {
+    id: "fixture",
+    label: "fixture service",
+    async run() {
+      checks += 1;
+      return { ok: false, detail: "offline", hint: "start fixture" };
+    },
+  };
+  try {
+    await mkdir(worldsDirectory);
+    await writeFile(join(worldsDirectory, "warned.ts"), [
+      `import { hold } from ${JSON.stringify(holdUrl)};`,
+      'await hold({ name: "warned", outputs: { ready: "yes" } });',
+      "",
+    ].join("\n"), "utf8");
+
+    const progress: string[] = [];
+    assert.equal(await main(["up", "warned", "--detach"], {
       cwd: root,
       worldsDirectory,
-      adapters: [adapter],
-      print: (line) => lines.push(line),
-      onExit: async () => { waited = true; },
-    });
+      preflight: [failingCheck],
+      print: () => {},
+      progress: (line) => progress.push(line),
+    }), 0);
+    assert.ok(progress.includes("preflight  node ✔  fixture service ✖"));
+    assert.ok(progress.includes("⚠ fixture service offline — start fixture"));
+    assert.equal(await access(receiptPath).then(() => true, () => false), true);
 
-    assert.equal(result, 0);
-    assert.equal(receivedName, "fixture-world");
-    assert.equal(detached, true);
-    assert.equal(waited, false);
-    assert.ok(lines.includes('World "fixture-world" is up (world file ' + worldPath + ').'));
+    const attachProgress: string[] = [];
+    assert.equal(await main(["attach", "warned", "--plain"], {
+      cwd: root,
+      worldsDirectory,
+      preflight: [failingCheck],
+      print: () => {},
+      progress: (line) => attachProgress.push(line),
+    }), 0);
+    assert.ok(attachProgress.some((line) => line.startsWith("✔ warned is up")));
+    assert.equal(checks, 1, "attach does not run preflight");
+
+    const planLines: string[] = [];
+    assert.equal(await main(["plan", "warned"], {
+      cwd: root,
+      worldsDirectory,
+      preflight: [failingCheck],
+      print: (line) => planLines.push(line),
+      progress: () => {},
+    }), 0);
+    assert.equal(planLines[0], "• running (invocation unverified)");
+    assert.equal(checks, 1, "plan does not run preflight");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandledRejections, []);
   } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+    await main(["down", "warned"], {
+      cwd: root,
+      worldsDirectory,
+      print: () => {},
+      progress: () => {},
+    });
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("the shared shell persists, lists, resumes, and forgets adapter snapshots", async () => {
-  const root = await mkdtemp(join(tmpdir(), "openwork-world-lifecycle-"));
+test("foreground scripts receive argv after -- and mirror their exit code", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openwork-world-cli-argv-"));
   try {
-    const stateDirectory = join(root, "state");
-    const snapshot = '{"adapter":"fixture","name":"demo"}\n';
-    let disposed = false;
-    let tornDown = false;
-    const adapter: WorldRuntimeAdapter = {
-      id: "fixture",
-      snapshotDirectory: stateDirectory,
-      async start(request) {
-        return {
-          name: request.name ?? "missing",
-          lines: ["fixture up"],
-          snapshotText: snapshot,
-          async detach() {},
-          async dispose() { disposed = true; },
-        };
-      },
-      async rebuild() { throw new Error("unused"); },
-      async resume(text, options) {
-        assert.equal(text, snapshot);
-        assert.equal(options.teardown, true);
-        return {
-          name: "demo",
-          lines: ["fixture resumed"],
-          async detach() {},
-          async teardown() {
-            tornDown = true;
-            return ["fixture stopped"];
-          },
-        };
-      },
-      summarize(text) {
-        if (text !== snapshot) throw new Error("not a fixture snapshot");
-        return {
-          name: "demo",
-          createdAt: "2026-08-25T00:00:00.000Z",
-          line: "demo  fixture",
-        };
-      },
-    };
-    const options = {
+    const worldsDirectory = join(root, "worlds");
+    const outputPath = join(root, "argv.json");
+    await mkdir(worldsDirectory);
+    await writeFile(join(worldsDirectory, "argv.ts"), `
+import { writeFile } from "node:fs/promises";
+await writeFile(process.argv[2], JSON.stringify(process.argv.slice(3)), "utf8");
+process.exitCode = 7;
+`, "utf8");
+
+    const code = await main(["up", "argv", "--", outputPath, "--detach", "plain"], {
       cwd: root,
-      worldsDirectory: join(root, "worlds"),
-      presets: {
-        fixture: {
-          adapter: "fixture",
-          detached: false,
-          requiresSharedState: false,
-          topology: {},
-        },
-      },
-      adapters: [adapter],
-      print: (_line: string) => {},
-      onExit: async () => {},
-    };
-
-    assert.equal(await main(["up", "fixture", "--name", "demo"], options), 0);
-    assert.equal(disposed, true);
-    assert.equal(await readFile(join(stateDirectory, "demo.json"), "utf8"), snapshot);
-
-    const listed: string[] = [];
-    assert.equal(await main(["list"], { ...options, print: (line) => listed.push(line) }), 0);
-    assert.ok(listed.includes("demo  fixture"));
-
-    assert.equal(await main(["resume", "demo", "--teardown"], options), 0);
-    assert.equal(tornDown, true);
-    assert.equal(await main(["forget", "demo"], options), 0);
-    await assert.rejects(readFile(join(stateDirectory, "demo.json"), "utf8"), { code: "ENOENT" });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("shared-state definitions are refused before their adapter runs", async () => {
-  let started = false;
-  const lines: string[] = [];
-  const result = await main(["up", "danger"], {
-    cwd: tmpdir(),
-    worldsDirectory: join(tmpdir(), "missing-worlds"),
-    presets: {
-      danger: {
-        adapter: "fixture",
-        detached: true,
-        requiresSharedState: true,
-        topology: {},
-      },
-    },
-    adapters: [{
-      id: "fixture",
-      snapshotDirectory: join(tmpdir(), "fixture-world-state"),
-      async start() { started = true; throw new Error("must not run"); },
-      async rebuild() { throw new Error("unused"); },
-      async resume() { throw new Error("unused"); },
-      summarize() { throw new Error("unused"); },
-    }],
-    print: (line) => lines.push(line),
-  });
-  assert.equal(result, 1);
-  assert.equal(started, false);
-  assert.match(lines[0] ?? "", /without explicit --allow-shared-state/);
-});
-
-test("world names are validated before adapter side effects", async () => {
-  let started = false;
-  const result = await main(["up", "fixture", "--name", "../escape"], {
-    cwd: tmpdir(),
-    worldsDirectory: join(tmpdir(), "missing-worlds"),
-    presets: {
-      fixture: {
-        adapter: "fixture",
-        detached: true,
-        requiresSharedState: false,
-        topology: {},
-      },
-    },
-    adapters: [{
-      id: "fixture",
-      snapshotDirectory: join(tmpdir(), "fixture-world-state"),
-      async start() { started = true; throw new Error("must not run"); },
-      async rebuild() { throw new Error("unused"); },
-      async resume() { throw new Error("unused"); },
-      summarize() { throw new Error("unused"); },
-    }],
-    print: () => {},
-  });
-
-  assert.equal(result, 1);
-  assert.equal(started, false);
-});
-
-test("same-name snapshots across adapters are refused instead of guessed or deleted", async () => {
-  const root = await mkdtemp(join(tmpdir(), "openwork-world-ambiguous-"));
-  try {
-    const firstDirectory = join(root, "first");
-    const secondDirectory = join(root, "second");
-    await mkdir(firstDirectory);
-    await mkdir(secondDirectory);
-    await writeFile(join(firstDirectory, "demo.json"), '{"adapter":"first"}\n', "utf8");
-    await writeFile(join(secondDirectory, "demo.json"), '{"adapter":"second"}\n', "utf8");
-    const adapter = (id: string, snapshotDirectory: string): WorldRuntimeAdapter => ({
-      id,
-      snapshotDirectory,
-      async start() { throw new Error("unused"); },
-      async rebuild() { throw new Error("unused"); },
-      async resume() { throw new Error("must not choose an adapter"); },
-      summarize(text) {
-        const value: unknown = JSON.parse(text);
-        if (typeof value !== "object" || value === null || !("adapter" in value) || value.adapter !== id) {
-          throw new Error("wrong adapter");
-        }
-        return { name: "demo", createdAt: "2026-08-25T00:00:00.000Z", line: id };
-      },
+      worldsDirectory,
+      print: () => {},
     });
-    const lines: string[] = [];
-    const options = {
-      cwd: root,
-      worldsDirectory: join(root, "worlds"),
-      adapters: [adapter("first", firstDirectory), adapter("second", secondDirectory)],
-      print: (line: string) => lines.push(line),
-    };
-
-    assert.equal(await main(["resume", "demo"], options), 1);
-    assert.match(lines.at(-1) ?? "", /ambiguous across adapters/);
-    assert.equal(await main(["forget", "demo"], options), 1);
-    assert.equal(await readFile(join(firstDirectory, "demo.json"), "utf8"), '{"adapter":"first"}\n');
-    assert.equal(await readFile(join(secondDirectory, "demo.json"), "utf8"), '{"adapter":"second"}\n');
+    assert.equal(code, 7);
+    const recordedArgs: unknown = JSON.parse(await readFile(outputPath, "utf8"));
+    assert.deepEqual(recordedArgs, ["--detach", "plain"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

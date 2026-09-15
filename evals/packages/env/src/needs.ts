@@ -7,6 +7,8 @@ export interface TestNeeds {
   commands?: string[];
   daytona?: boolean;
   placement?: "daytona" | "local";
+  /** Host operating system the journey needs (for example native AppKit needs "darwin"). */
+  platform?: NodeJS.Platform;
 }
 
 export class SkipError extends Error {
@@ -25,7 +27,7 @@ function present(env: NodeJS.ProcessEnv, name: string): boolean {
 
 function commandProbeArgs(command: string): string[] {
   if (command === "kubectl") return ["version", "--client"];
-  if (command === "helm" || command === "kind" || command === "docker") return ["version"];
+  if (command === "helm" || command === "kind" || command === "docker" || command === "openssl") return ["version"];
   return ["--version"];
 }
 
@@ -47,6 +49,7 @@ export function unmetNeeds(requirements: TestNeeds, env: NodeJS.ProcessEnv): str
       missing.push("set OPENAI_API_KEY or ANTHROPIC_API_KEY");
     }
   }
+  if (requirements.platform && process.platform !== requirements.platform) missing.push(`run on ${requirements.platform}`);
   if (requirements.daytona && env.OPENWORK_EVAL_DAYTONA?.trim() !== "1") {
     missing.push("set OPENWORK_EVAL_DAYTONA=1");
   }

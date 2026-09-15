@@ -24,6 +24,7 @@ type OpenworkContextProjectorInput = {
     "sidebarOpen" | "sidePanelState" | "applicationMenuVisible" | "workspaceRightSidebarExpanded"
   >;
   panelSessions: PanelTabStore["sessions"];
+  pinnedSessionIds: string[];
   availableAffordances: OpenworkAffordanceDescriptor[];
 };
 
@@ -122,9 +123,8 @@ export function buildOpenworkContext(
   const sessionPanelKind = panelOwnerSessionId
     ? input.ui.sidePanelState[panelOwnerSessionId] ?? null
     : null;
-  const voiceOpen = Object.values(input.ui.sidePanelState).includes("voice");
-  const sidePanelKind = voiceOpen ? "voice" : sessionPanelKind;
-  const ownerSessionId = sidePanelKind === "voice" ? null : panelOwnerSessionId;
+  const sidePanelKind = sessionPanelKind;
+  const ownerSessionId = panelOwnerSessionId;
   const sessionPanel = ownerSessionId ? input.panelSessions[ownerSessionId] : undefined;
   const screen = screenFromRoute(input.route);
   const provider: OpenworkProviderRef = { id: "openwork-ui", kind: "builtin" };
@@ -158,6 +158,7 @@ export function buildOpenworkContext(
         workspaceId: tab.workspaceId,
         open: true,
         visible: inPrimary || inSecondary,
+        pinned: input.pinnedSessionIds.includes(tab.sessionId),
         pane: inPrimary ? "primary" : inSecondary ? "secondary" : null,
         focused: inPrimary
           ? input.workbench.focusedPane === "primary"
@@ -196,6 +197,7 @@ export function buildOpenworkContext(
     conversations: {
       tabs: input.workbench.tabs,
       layout,
+      pinnedSessionIds: input.pinnedSessionIds,
     },
     chrome: {
       sidebarOpen: input.ui.sidebarOpen,

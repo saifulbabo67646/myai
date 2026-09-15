@@ -47,10 +47,10 @@ Non-goals (v1):
 | MCP gateway | `ee/apps/den-api/src/mcp/agent.ts` | Hosts `search_capabilities` / `execute_capability`; new work plugs in behind them |
 | Capability registry | `ee/apps/den-api/src/mcp/capability-registry.ts` | Fan-out to capability sources — **the extension point** |
 | Worker resolution | den-api `/v1/cloud/gateway/resolve` (used by `ee/apps/den-gateway/src/app.ts`) | Maps a member to their cloud openwork-server instance + auth |
-| openwork-server session API | `apps/server` (`POST /workspace/:id/sessions`, `/session/:id/prompt_async`, transcript reads) | The actual chat runtime on the worker |
+| openwork-server session API | `apps/server` (`POST /workspace/:id/opencode/session`, native prompt/transcript/status routes) | The actual chat runtime on the worker |
 | Programmatic session client | `packages/headless-threads` | Typed client for driving native sessions from code |
 | Desktop → gateway attach | `apps/app/src/react-app/domains/connections/cloud-mcp-reconciler.ts` + `apps/server/src/routes/cloud-mcp.ts` (token mint: `POST /v1/mcp/token`) | Desktop engines already have `/mcp/agent`; zero desktop changes required for v1 |
-| MCP App cards | `ee/apps/den-api/src/mcp/connection-action-app.ts` pattern + `packages/mcp-apps` | Render an "Open in OpenWork Web" card |
+| MCP App cards | `ee/apps/den-api/src/mcp/plugin-flow-app.ts` pattern + `packages/mcp-apps` | Render an "Open in OpenWork Web" card |
 
 ## Architecture
 
@@ -60,9 +60,9 @@ Desktop chat (engine)                den-api (/mcp/agent)              Cloud wor
 agent calls                          capability-registry
 search_capabilities ───────────────▶  └─ remote-session source
 execute_capability                       │ resolve member worker
- "remoteSession.create" ───────────▶     │  (cloud/gateway/resolve) ──▶ POST /workspace/:id/sessions
- "remoteSession.send" ─────────────▶     │                        ───▶ POST /session/:id/prompt_async
- "remoteSession.read" ─────────────▶     │                        ───▶ GET  session transcript/status
+ "remoteSession.create" ───────────▶     │  (cloud/gateway/resolve) ──▶ POST /workspace/:id/opencode/session
+ "remoteSession.send" ─────────────▶     │                        ───▶ POST /workspace/:id/opencode/session/:id/prompt_async
+ "remoteSession.read" ─────────────▶     │                        ───▶ GET  native session/message/todo/status routes
                                          └ returns result + MCP App
                                            card linking to OpenWork Web
                                                                         OpenWork Web (apps/app via
@@ -99,9 +99,14 @@ Execution path inside the source:
    via a shared internal helper; do not duplicate resolution logic.
 3. Call openwork-server using the `packages/headless-threads` client (or its
    underlying HTTP shape) with the resolved worker URL + token.
-4. Map worker errors to gateway error vocabulary: no worker provisioned →
-   actionable "needs cloud worker" result (relay the human step, mirroring
-   `needs_admin_setup` / `needs_signin` conventions), never a fake success.
+4. On the first `remote-session:create`, provision the member's workspace
+   through the browser's shared `ensureCloudWorker` path. Return
+   `cloud_runtime_provisioning`, `retryable: true`, and `retryAfterMs: 30000`
+   while it starts. No task is queued at this stage: the agent retries create
+   with the same arguments after the delay. Once ready, the normal native
+   session client creates the task and submits its prompt.
+   `read` and `send` never create a missing workspace; they return
+   `needs_cloud_setup` with guidance to start a new task using create.
 
 ### 2. Async model
 
@@ -114,7 +119,7 @@ exists: `automation-index.ts`, `resource.ts`) — explicitly out of scope for v1
 ### 3. MCP App card
 
 `remoteSession.create` and `remoteSession.send` results include a standard
-MCP Apps `ui://` card (pattern: `connection-action-app.ts` +
+MCP Apps `ui://` card (pattern: `plugin-flow-app.ts` +
 `packages/mcp-apps` renderer): session title, state, last activity, and an
 **Open in OpenWork Web** link (`https://web.openworklabs.com/...` deep link,
 resolved from runtime config — same origin den-web's "Web tab" uses). Clients
@@ -126,20 +131,31 @@ without MCP Apps get text fallback with the same URL.
   (e.g. `remote-session`), included in first-party desktop tokens
   (`/v1/mcp/token`) and public OAuth tokens by default; org policy can turn it
   off via the existing exposure allowlist mechanics (`policy.ts` conventions).
-- **Org capability flag**: Cloud is default-off per organization
-  (`metadata.capabilities.cloud`, `cloud-rollout.ts`). When the flag is off,
-  the source is invisible in `search_capabilities` and execute reports
-  `unknown_capability` — mirroring the external-MCP rollout pattern, so
-  members of a flag-off org never see an action they cannot take. The runtime
-  re-checks the flag live at execute time (`cloud_not_available`, an
-  admin-facing action) as defense in depth against mid-session flag flips;
-  `needs_cloud_setup` is reserved for the member-facing "open OpenWork Cloud
-  once to provision" case.
+- **Cloud entitlement**: Cloud is hosted-only (`cloud-hosting.ts`, multi-org
+  deployments with a Daytona provisioner) and entitled per organization by
+  OpenWork Web access — a paid Web subscription or the platform-admin
+  complimentary grant — rather than a separate per-organization rollout flag.
+  When the deployment cannot host Cloud, the source is invisible in
+  `search_capabilities` and execute reports `unknown_capability`. Execution
+  re-checks Web access live (`openwork_web_access_required`) and the runtime
+  re-checks hosting availability (`cloud_not_available`) as defense in depth;
+  first-use provisioning requires a valid `create` request with `mcp:write`
+  and active Web access. Concurrent first-use requests and browser access use
+  the same member-scoped worker and creation deduplication. This deduplicates
+  workspace provisioning, not subsequent successful session creation calls.
 - Member-scoped only: capabilities operate on the caller's resolved worker.
   `sessionId` from another member's worker must 404, not 403-leak.
 - Prompts transit the gateway but are stored only on the worker (same trust
   domain as existing web chat). No prompt content in gateway logs; log
   receipts/ids only.
+
+The first-use contract is exercised by
+`pnpm evals:pr specs/remote-session-first-use.test.ts`: an isolated Den and
+database handle real MCP requests, while an HTTP witness replaces Daytona
+and the worker's native session API. The journey checks access denial,
+read/write boundaries, concurrent provisioning, first prompt delivery after
+readiness, browser reuse, and separate workspaces for two members. It does
+not launch a live Daytona VM or run a model.
 
 ### 5. Desktop side (v1: zero code)
 
@@ -175,7 +191,7 @@ What ships today (all reused):
   the gateway capability only **enqueues tasks**; it never touches runner auth.
 - **Execution shape:** the assignment is already `{instructions, model,
   timeoutMs}` and `executeDesktopAutomation` runs it as a **normal visible
-  local session** (`POST /workspace/:id/sessions`), returning `sessionId` /
+  local session** (`POST /workspace/:id/opencode/session`), returning `sessionId` /
   `workspaceId` into the Den receipt. Exactly the semantics we want: remote
   work on desktop is a real thread the human can watch and take over.
 - **Built-in extension points:** runner registration declares
@@ -331,7 +347,7 @@ pulls. Therefore:
 
 1. **Phase 1** — capability source + worker routing + text results. Proof:
    testkit spec in `evals/specs/` driving desktop engine → gateway → mock
-   worker (witness for openwork-server, per `build-a-witness`), asserting
+   worker (witness for openwork-server, per `write-a-spec` mocks), asserting
    session creation, prompt receipt, transcript read, and member-scoping
    (cross-member 404).
 2. **Phase 2** — MCP App card + built-in skill. Proof: MCP App render spec

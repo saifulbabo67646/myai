@@ -15,6 +15,7 @@ import {
   resetRuntimeStatesAfterFailedServerStart,
   resolveEvalLocalServerDelayMs,
   resolveOpenworkServerConfigPath,
+  resolveOpenworkServerLogFile,
   resolveOpenworkServerReuse,
   seedWorkspacePathsForEmbeddedServer,
   selectStickyOpenworkPortWorkspace,
@@ -81,13 +82,15 @@ describe("workspace root preparation", () => {
 });
 
 describe("bundled OpenCode runtime", () => {
-  it("pins the engine release containing the timestamp-based session loop repair", async () => {
+  it("pins the engine release preserving OpenAI priority for GPT-6 without losing the session loop repair", async () => {
     const constantsPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../constants.json");
     const constants = JSON.parse(await readFile(constantsPath, "utf8"));
 
     // OpenCode #40990 stops old assistant messages with lexicographically
     // later IDs from short-circuiting a newly appended user turn.
-    assert.equal(constants.opencodeVersion, "v1.18.18");
+    // 1.18.30 also includes #47659 / #47671: updated OpenAI capabilities and
+    // preservation of explicit service tiers, including GPT-6 Astra priority.
+    assert.equal(constants.opencodeVersion, "v1.18.30");
   });
 });
 
@@ -99,6 +102,38 @@ describe("openwork server snapshot", () => {
       inProcess: true,
     });
     assert.equal(snapshot.running, true);
+  });
+
+  it("exposes the server log file so Settings > Debug can point at it", () => {
+    const withLog = snapshotOpenworkServerState({
+      child: null,
+      childExited: true,
+      inProcess: true,
+      logFilePath: "/tmp/userData/logs/openwork-server.log",
+    });
+    assert.equal(withLog.logFilePath, "/tmp/userData/logs/openwork-server.log");
+    const withoutLog = snapshotOpenworkServerState({ child: null, childExited: true, inProcess: false });
+    assert.equal(withoutLog.logFilePath, null);
+  });
+});
+
+describe("resolveOpenworkServerLogFile", () => {
+  it("defaults to logs/openwork-server.log under the user data dir", () => {
+    assert.equal(
+      resolveOpenworkServerLogFile("/tmp/userData", {}),
+      path.join("/tmp/userData", "logs", "openwork-server.log"),
+    );
+  });
+
+  it("prefers an explicit OPENWORK_SERVER_LOG_FILE", () => {
+    assert.equal(
+      resolveOpenworkServerLogFile("/tmp/userData", { OPENWORK_SERVER_LOG_FILE: "  /var/log/ow.log " }),
+      "/var/log/ow.log",
+    );
+    assert.equal(
+      resolveOpenworkServerLogFile("/tmp/userData", { OPENWORK_SERVER_LOG_FILE: "   " }),
+      path.join("/tmp/userData", "logs", "openwork-server.log"),
+    );
   });
 });
 

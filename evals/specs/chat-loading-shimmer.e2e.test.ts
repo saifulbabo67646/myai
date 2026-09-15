@@ -1,112 +1,133 @@
 import { expect } from "vitest";
-import { control, createAndSelectWorkspace, evalIn, seedSessions, waitFor } from "@openwork/behaviors";
-import { desktop } from "@openwork/hosts";
-import { needs, test } from "@openwork/testkit";
+import { spec } from "@openwork/testkit";
+import { arrangeControl, shimmerChat } from "../worlds/chat.ts";
 
-const enabled = process.env.OPENWORK_EVAL_E2E_TESTS === "1";
-const title = enabled
-  ? "chat working and command activity use quiet shimmer without spinners"
-  : "chat loading shimmer skipped — needs: set OPENWORK_EVAL_E2E_TESTS=1";
+const test = spec.world(shimmerChat);
 
-test.skipIf(!enabled)(title, async ({ evidence }) => {
-  needs({ optIn: ["OPENWORK_EVAL_E2E_TESTS"] });
+// `.ow-text-shimmer` animates `background-position`, which Chromium paints on
+// the main thread, so its sweep is stepped (`steps(48, end)` over 2.4s): twenty
+// repaints a second instead of one per vsync. A second of sampled frames should
+// therefore show about twenty distinct positions, with a little slack for step
+// boundaries, while a smooth `linear` sweep changes on every sampled frame.
+const maxDistinctShimmerPositions = 24;
+// Below this many animation frames per second the sample cannot tell a stepped
+// sweep from a smooth one, so the claim is unreadable rather than proven.
+const minSampledFrames = 30;
 
-  await using app = await desktop({ name: "chat-loading-shimmer" });
-  await createAndSelectWorkspace(app, {
-    path: `/tmp/openwork-chat-loading-shimmer-${Date.now()}`,
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+test("chat working and command activity use quiet shimmer without spinners", async ({ world, user, seed, probe, step }) => {
+  const working = await step("the main Working state shimmers without a spinner", async () => {
+    await user.see({ text: /Working/ });
+    // TODO(primitive): inspect the visual treatment, animation cadence, and backdrop composition of a visible status row.
+    const reading = await probe.eval(async () => {
+      const row = document.querySelector<HTMLElement>('[data-loading-message="working"]');
+      const shimmer = row?.querySelector<HTMLElement>(".ow-text-shimmer");
+      const pane = document.querySelector<HTMLElement>("main[data-session-pane]");
+      const header = pane?.querySelector("header");
+      const filterOf = (element: Element) => getComputedStyle(element).backdropFilter;
+      const nestedFilters = [];
+      if (row instanceof HTMLElement && pane instanceof HTMLElement) {
+        for (let node = row.parentElement; node && node !== pane; node = node.parentElement) {
+          const filter = filterOf(node);
+          if (filter !== "none") nestedFilters.push(node.tagName.toLowerCase() + ": " + filter);
+        }
+      }
+      const positions = new Set();
+      let sampledFrames = 0;
+      if (shimmer instanceof HTMLElement) {
+        const startedAt = performance.now();
+        await new Promise((resolve) => {
+          const sample = (now: number) => {
+            positions.add(getComputedStyle(shimmer).backgroundPosition);
+            sampledFrames += 1;
+            if (now - startedAt >= 1000) resolve(undefined);
+            else requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+        });
+      }
+      return {
+        text: row instanceof HTMLElement ? row.innerText.trim() : "",
+        hasSpinner: Boolean(row?.querySelector<HTMLElement>(".animate-spin")),
+        hasShimmer: shimmer instanceof HTMLElement,
+        animationName: shimmer instanceof HTMLElement ? getComputedStyle(shimmer).animationName : "",
+        sampledFrames,
+        distinctPositions: positions.size,
+        isMac: document.documentElement.classList.contains("openwork-platform-mac"),
+        paneFilter: pane instanceof HTMLElement ? filterOf(pane) : "",
+        headerFilter: header instanceof HTMLElement ? filterOf(header) : "",
+        nestedFilters,
+      };
+    }, { awaitPromise: true, timeoutMs: 15_000 });
+    expect(reading).toMatchObject({ text: expect.stringContaining("Working"), hasSpinner: false, hasShimmer: true });
+    return reading;
   });
-  await seedSessions(app, ["Shimmer proof"]);
-  await waitFor(
-    app,
-    `window.__openworkControl.listActions().some((action) => action.id === "eval.chat_loading.seed" && !action.disabled)`,
-    { timeoutMs: 30_000, label: "chat loading proof control ready" },
-  );
-  await control(app, "eval.chat_loading.seed");
-  await waitFor(app, `Boolean(document.querySelector('[data-loading-message="working"] .ow-text-shimmer'))`, {
-    timeoutMs: 15_000,
-    label: "main Working shimmer",
-  });
-  const working = await evalIn(app, `(() => {
-    const row = document.querySelector('[data-loading-message="working"]');
-    return {
-      text: row instanceof HTMLElement ? row.innerText.trim() : "",
-      hasSpinner: Boolean(row?.querySelector('.animate-spin')),
-      hasShimmer: Boolean(row?.querySelector('.ow-text-shimmer')),
-    };
-  })()`);
-  expect(working).toMatchObject({ hasSpinner: false, hasShimmer: true });
-  if (!working || typeof working !== "object" || !("text" in working) || typeof working.text !== "string") {
-    throw new Error(`Working row was not readable: ${JSON.stringify(working)}`);
-  }
-  expect(working.text).toContain("Working");
-  evidence.recordAssertionEvidence(
-    "The main chat Working state uses shimmer instead of a circular spinner",
-    `The live row remained readable as “${working.text}” and contained no animate-spin indicator.`,
-    true,
-  );
 
-  await control(app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "active" });
-  await waitFor(app, `Boolean(document.querySelector('[data-tool-aggregate-now] .ow-text-shimmer'))`, {
-    timeoutMs: 15_000,
-    label: "aggregate Now shimmer",
+  await step("the Working shimmer keeps sweeping but repaints on a bounded cadence instead of every frame", async () => {
+    expect(working).toMatchObject({ animationName: "ow-text-shimmer" });
+    if (!isRecord(working) || typeof working.sampledFrames !== "number" || typeof working.distinctPositions !== "number") {
+      throw new Error(`Shimmer cadence was not readable: ${JSON.stringify(working)}`);
+    }
+    expect(working.sampledFrames).toBeGreaterThanOrEqual(minSampledFrames);
+    expect(working.distinctPositions).toBeGreaterThanOrEqual(2);
+    expect(working.distinctPositions).toBeLessThanOrEqual(maxDistinctShimmerPositions);
   });
-  const aggregate = await evalIn(app, `(() => {
-    const row = document.querySelector('[data-tool-aggregate-now]');
-    const summary = [...document.querySelectorAll('[data-tool-aggregate] > button')]
-      .find((button) => (button.textContent ?? "").includes("Running command"));
-    return {
-      text: row instanceof HTMLElement ? row.innerText.replace(/\\s+/g, " ").trim() : "",
-      hasSpinner: Boolean(row?.querySelector('.animate-spin')),
-      hasShimmer: Boolean(row?.querySelector('.ow-text-shimmer')),
-      singularSummary: summary instanceof HTMLElement ? summary.innerText.replace(/\\s+/g, " ").trim() : "",
-    };
-  })()`);
-  expect(aggregate).toMatchObject({ hasSpinner: false, hasShimmer: true });
-  if (!aggregate || typeof aggregate !== "object" || !("text" in aggregate) || typeof aggregate.text !== "string") {
-    throw new Error(`Aggregate activity row was not readable: ${JSON.stringify(aggregate)}`);
-  }
-  expect(aggregate.text).toContain("Now:");
-  if (!("singularSummary" in aggregate) || typeof aggregate.singularSummary !== "string") {
-    throw new Error(`Aggregate summary was not readable: ${JSON.stringify(aggregate)}`);
-  }
-  expect(aggregate.singularSummary).toContain("Running command");
-  expect(aggregate.singularSummary).not.toContain("Running 1 command");
-  evidence.recordAssertionEvidence(
-    "The aggregate Now state uses shimmer instead of a circular spinner",
-    `The live aggregate row remained readable as “${aggregate.text}” and contained no animate-spin indicator.`,
-    true,
-  );
 
-  const expanded = await evalIn(app, `(() => {
-    const trigger = document.querySelector('[data-tool-aggregate] > button');
-    if (!(trigger instanceof HTMLButtonElement)) return false;
-    trigger.click();
-    return true;
-  })()`);
-  expect(expanded).toBe(true);
-  await waitFor(app, `Boolean(document.querySelector('[data-tool-aggregate-command]'))`, {
-    timeoutMs: 15_000,
-    label: "expanded aggregate command block",
+  await step("the session pane is the only backdrop-filter surface above the transcript", async () => {
+    // The macOS shell blurs the vibrancy backdrop once, on the session pane.
+    // Nothing scrolls beneath the pane header or behind the transcript surface,
+    // so any further backdrop filter between the pane and the Working row is an
+    // invisible extra full-pane blur pass on every transcript repaint.
+    if (!isRecord(working) || typeof working.isMac !== "boolean") {
+      throw new Error(`Pane composition was not readable: ${JSON.stringify(working)}`);
+    }
+    expect(working).toMatchObject({
+      paneFilter: working.isMac ? expect.stringContaining("blur(") : "none",
+      headerFilter: "none",
+      nestedFilters: [],
+    });
   });
-  const command = await evalIn(app, `(() => {
-    const block = document.querySelector('[data-tool-aggregate-command]');
-    const aggregate = block?.closest('[data-tool-aggregate]');
-    return {
-      text: block instanceof HTMLElement ? block.innerText.replace(/\\s+/g, " ").trim() : "",
-      commandSummaryCount: aggregate instanceof HTMLElement
-        ? (aggregate.innerText.match(/(?:Ran|Running) command/g) ?? []).length
-        : 0,
-    };
-  })()`);
-  expect(command).toMatchObject({ commandSummaryCount: 1 });
-  if (!command || typeof command !== "object" || !("text" in command) || typeof command.text !== "string") {
-    throw new Error(`Expanded command block was not readable: ${JSON.stringify(command)}`);
-  }
-  expect(command.text).toContain("$");
-  expect(command.text).toContain("git status --short --branch");
-  evidence.recordAssertionEvidence(
-    "Expanded command history uses a readable rounded shell block",
-    "The live expanded aggregate rendered the command with a shell prompt inside its dedicated command block.",
-    true,
-  );
+
+  await arrangeControl(seed, world.app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "active" });
+  await step("the aggregate activity state shimmers and keeps a singular summary", async () => {
+    await user.see({ text: /Running command/ });
+    await user.see({ text: /Reading brief\.md/ });
+    // TODO(primitive): inspect the visual treatment and summary of an aggregate status row.
+    const aggregate = await probe.eval(() => {
+      const row = document.querySelector<HTMLElement>("[data-tool-aggregate-now]");
+      const summary = [...document.querySelectorAll<HTMLElement>("[data-tool-aggregate] > button")]
+        .find((button) => (button.textContent ?? "").includes("Running command"));
+      return {
+        text: row instanceof HTMLElement ? row.innerText.replace(/\s+/g, " ").trim() : "",
+        hasSpinner: Boolean(row?.querySelector<HTMLElement>(".animate-spin")),
+        hasShimmer: Boolean(row?.querySelector<HTMLElement>(".ow-text-shimmer")),
+        summary: summary instanceof HTMLElement ? summary.innerText.replace(/\s+/g, " ").trim() : "",
+      };
+    });
+    expect(aggregate).toMatchObject({ text: expect.stringContaining("Reading brief.md"), hasSpinner: false, hasShimmer: true });
+    expect(aggregate).not.toMatchObject({ text: expect.stringContaining("Now:") });
+    expect(aggregate).toMatchObject({ summary: expect.stringContaining("Running command") });
+    expect(aggregate).not.toMatchObject({ summary: expect.stringContaining("Running 1 command") });
+  });
+
+  await step("expanded command history is readable", async () => {
+    await user.click({ role: "button", label: /Running command/ });
+    await user.see({ text: /git status --short --branch/ });
+    // TODO(primitive): count command summaries in a visible aggregate.
+    const command = await probe.eval(() => {
+      const block = document.querySelector<HTMLElement>("[data-tool-aggregate-command]");
+      const aggregate = block?.closest("[data-tool-aggregate]");
+      return {
+        text: block instanceof HTMLElement ? block.innerText.replace(/\s+/g, " ").trim() : "",
+        summaryCount: aggregate instanceof HTMLElement
+          ? (aggregate.innerText.match(/(?:Ran|Running) command/g) ?? []).length
+          : 0,
+      };
+    });
+    expect(command).toMatchObject({ text: expect.stringContaining("$"), summaryCount: 1 });
+    expect(command).toMatchObject({ text: expect.stringContaining("git status --short --branch") });
+  });
 });

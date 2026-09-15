@@ -7,6 +7,7 @@ const MAX_SCOPE_CACHE_BYTES = 3_000_000;
 export const DASHBOARD_AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
 
 export type DashboardTileCache = {
+  argumentsSignature?: string;
   cachedAt: number;
   workspaceId: string;
   app: OpenworkMcpAppResource;
@@ -55,6 +56,7 @@ function parseResult(value: unknown): PreservedMcpAppResult | null {
   if (value._meta !== undefined && !isRecord(value._meta)) return null;
   return {
     content: value.content,
+    ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
     ...(value.structuredContent ? { structuredContent: value.structuredContent } : {}),
     ...(value._meta ? { _meta: value._meta } : {}),
   };
@@ -66,7 +68,10 @@ function parseCache(value: unknown, now: number): DashboardTileCache | null {
   if (value.cachedAt <= 0 || now - value.cachedAt > MAX_CACHE_AGE_MS) return null;
   const app = parseApp(value.app);
   const result = parseResult(value.result);
-  return app && result ? { cachedAt: value.cachedAt, workspaceId: value.workspaceId, app, result } : null;
+  return app && result ? {
+    cachedAt: value.cachedAt, workspaceId: value.workspaceId, app, result,
+    ...(typeof value.argumentsSignature === "string" ? { argumentsSignature: value.argumentsSignature } : {}),
+  } : null;
 }
 
 export function dashboardTileCacheScopeKey(userId: string | null, organizationId: string | null): string {
@@ -128,7 +133,8 @@ export function writeDashboardTileCache(
     const raw = window.localStorage.getItem(scopeKey);
     const parsed: unknown = raw === null ? {} : JSON.parse(raw);
     const next: Record<string, unknown> = isRecord(parsed) ? { ...parsed } : {};
-    next[entryId] = cache;
+    // A live host lease must not survive in persisted HTML/result caches.
+    next[entryId] = { ...cache, app: parseApp(cache.app) };
 
     const entries = Object.entries(next).sort((left, right) => {
       const leftAt = isRecord(left[1]) && typeof left[1].cachedAt === "number" ? left[1].cachedAt : 0;
@@ -144,4 +150,14 @@ export function writeDashboardTileCache(
   } catch {
     // Caching is best-effort. A live result still renders when storage is unavailable.
   }
+}
+
+export function removeDashboardTileCache(scopeKey: string, entryId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(scopeKey) ?? "{}");
+    if (!isRecord(parsed)) return;
+    delete parsed[entryId];
+    window.localStorage.setItem(scopeKey, JSON.stringify(parsed));
+  } catch {}
 }

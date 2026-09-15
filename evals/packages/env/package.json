@@ -8,6 +8,16 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./eval-engine": {
+      "types": "./src/eval-engine.ts",
+      "development": "./src/eval-engine.ts",
+      "default": "./src/eval-engine.ts"
+    },
+    "./eval-ref": {
+      "types": "./src/eval-ref.ts",
+      "development": "./src/eval-ref.ts",
+      "default": "./src/eval-ref.ts"
     }
   },
   "dependencies": {
@@ -16,8 +26,6 @@
     "@openwork/hosts": "workspace:*",
     "@openwork/labs": "workspace:*",
     "@openwork/world": "link:../../../packages/world",
-    "effect": "4.0.0-beta.83",
-    "mysql2": "^3.11.3",
-    "zod": "^4.3.6"
+    "mysql2": "^3.11.3"
   }
 }

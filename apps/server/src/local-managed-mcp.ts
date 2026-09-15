@@ -38,7 +38,6 @@ import {
 } from "@openwork/enterprise-mcp-client";
 import { ApiError } from "./errors.js";
 import { sanitizeDiagnosticString } from "./diagnostic-sanitizer.js";
-import { backupTimestamp } from "./legacy-config-sweep.js";
 import { runtimeStorageDir } from "./runtime-db.js";
 import {
   readRuntimeOpencodeConfig,
@@ -435,6 +434,18 @@ async function pruneOrphanedManagedRuntimeEntries(config: ServerConfig, vault: L
  * rebuild the vault from the plaintext index (v2) or empty (v1) so members can
  * reconnect instead of hitting raw crypto errors.
  */
+function backupTimestamp(date: Date): string {
+  const parts = [
+    date.getFullYear(),
+    date.getMonth() + 1,
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+  ];
+  return parts.map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0")).join("");
+}
+
 async function recoverVaultLocked(config: ServerConfig, file: VaultFileState): Promise<LoadedVault> {
   const path = vaultPath(config);
   const backupName = `${basename(path)}.openwork-backup-${backupTimestamp(new Date())}`;
@@ -886,6 +897,21 @@ export async function getLocalManagedMcpConnection(config: ServerConfig, workspa
   return withVaultRead(config, (vault) => publicConnection(requireConnection(vault, workspaceId, name)));
 }
 
+/** Private App-host identity: a same-name gateway does not identify its current OAuth account. */
+export async function localManagedMcpAppIdentity(config: ServerConfig, workspaceId: string, name: string, url: unknown) {
+  if (url !== runtimeConfig(config, workspaceId, name, true).url) return null;
+  return withVaultRead(config, (vault) => {
+    const connection = requireConnection(vault, workspaceId, name);
+    return {
+      id: connection.id,
+      serverUrl: connection.serverUrl,
+      enabled: connection.enabled,
+      credentialRevision: connection.credential?.revision ?? null,
+      registrationRevision: connection.clientRegistration?.revision ?? null,
+    };
+  });
+}
+
 type AuthorizationStatePayload = {
   version: 1;
   workspaceId: string;
@@ -1145,6 +1171,7 @@ export async function completeLocalManagedMcpAuthorization(
   config: ServerConfig,
   state: string,
   code: string,
+  responseIssuer?: string,
 ): Promise<{ connection: LocalManagedMcpPublicConnection; workspaceId: string }> {
   const payload = await verifyAuthorizationState(config, state);
   const diagnostics: EnterpriseMcpDiagnosticEvent[] = [];
@@ -1155,6 +1182,7 @@ export async function completeLocalManagedMcpAuthorization(
       redirectUri: payload.redirectUri,
       code,
       authorizationId: state,
+      responseIssuer,
     });
     await verifyTools(config, payload.workspaceId, payload.name, payload.redirectUri, diagnostics);
     await writeManagedRuntimeEntry(config, payload.workspaceId, payload.name, true);

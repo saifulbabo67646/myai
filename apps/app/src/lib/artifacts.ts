@@ -35,11 +35,11 @@ const WORKSPACES_PREFIX_PATTERN = /^workspaces\/[^/]+\//i;
 const WORKSPACE_ID_PREFIX_PATTERN = /^workspace\/(?:ws_[^/]+|\d+|[0-9a-f-]{6,})\//i;
 
 export function isMarkdownPreviewSupported(extension: string) {
-  return ["md", "markdown", "mdx"].includes(extension);
+  return ["md", "markdown", "mdx", "mmd"].includes(extension);
 }
 
 export function isSheetPreviewSupported(extension: string) {
-  return ["csv", "tsv", "xlsx", "xls", "ods"].includes(extension);
+  return ["csv", "tsv", "xlsx"].includes(extension);
 }
 
 export function isImagePreviewSupported(extension: string) {
@@ -69,7 +69,7 @@ export function getArtifactType(filename: string): ArtifactType {
     return "unknown";
   }
 
-  if (["md", "markdown", "mdx", "rmd", "rst"].includes(extension)) {
+  if (["md", "markdown", "mdx", "mmd", "rmd", "rst"].includes(extension)) {
     return "markdown";
   }
 

@@ -1,10 +1,8 @@
 import type { DynamicToolUIPart, JSONValue, ProviderMetadata, TextUIPart } from "ai";
 import type { ToolPart } from "@opencode-ai/sdk/v2/client";
 import {
-  connectionActionAppResourceUri,
   connectionActionAppSchemaVersion,
   connectionActionPayloadSchema,
-  connectionActionToolName,
 } from "@openwork/types/connection-action-app";
 
 import { safeStringify } from "@/app/utils";
@@ -53,15 +51,9 @@ function connectionActionMcpResultFromError(error: string): JSONValue | null {
   });
   if (!payload.success) return null;
   return {
+    isError: true,
     content: [{ type: "text", text: error }],
     structuredContent: payload.data,
-    _meta: {
-      "openwork/mcpApp": {
-        toolName: connectionActionToolName,
-        resourceUri: connectionActionAppResourceUri,
-        arguments: { connectionId: payload.data.connectionId },
-      },
-    },
   };
 }
 
@@ -79,9 +71,19 @@ function toolCallProviderMetadata(part: ToolPart): ProviderMetadata {
   const childSessionId = part.tool === "task" && typeof stateMetadata.sessionId === "string" && stateMetadata.sessionId.trim()
     ? stateMetadata.sessionId.trim()
     : null;
+  const toolStartedAt = part.tool === "task" && "time" in part.state && typeof part.state.time?.start === "number"
+    && Number.isFinite(part.state.time.start)
+    ? part.state.time.start
+    : null;
   const openwork = {
     ...(mcpResult ? { mcpResult } : {}),
     ...(childSessionId ? { childSessionId } : {}),
+    ...(toolStartedAt === null ? {} : { toolStartedAt }),
+    ...(part.metadata?.openworkV2CodeMode === true ? {
+      codeMode: {
+        calls: Array.isArray(stateMetadata.toolCalls) && isJsonValue(stateMetadata.toolCalls) ? stateMetadata.toolCalls : [],
+      },
+    } : {}),
   };
   return {
     opencode: { partId: part.id },
@@ -134,6 +136,14 @@ export function parseDynamicToolUIPart(part: ToolPart): DynamicToolUIPart | null
   }
 
   if (part.state.status === "completed") {
+    if (part.metadata?.openworkV2CodeMode === true && part.state.metadata.error === true) {
+      return {
+        type: "dynamic-tool", toolName: part.tool, toolCallId: part.callID,
+        state: "output-error", input: part.state.input,
+        errorText: normalizeErrorText(part.state.output).display,
+        callProviderMetadata: toolCallProviderMetadata(part),
+      };
+    }
     return {
       type: "dynamic-tool",
       toolName: part.tool,

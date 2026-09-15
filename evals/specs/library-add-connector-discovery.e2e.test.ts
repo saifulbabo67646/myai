@@ -1,9 +1,9 @@
 import { expect } from "vitest";
-import { denFetch, evalIn, go, waitFor } from "@openwork/behaviors";
-import type { DenSession } from "@openwork/behaviors";
-import { screenshot, validate } from "@openwork/test-evidence";
-import { app, needs, server, test, unmetNeeds } from "@openwork/testkit";
+import { browserScript, needs, spec, unmetNeeds } from "@openwork/testkit";
 import type { TestNeeds } from "@openwork/testkit";
+import { libraryConnectorDiscovery } from "../worlds/library.ts";
+
+const test = spec.world(libraryConnectorDiscovery);
 
 const requirements: TestNeeds = {
   optIn: ["OPENWORK_EVAL_E2E_TESTS"],
@@ -11,296 +11,185 @@ const requirements: TestNeeds = {
 const missingRequirements = unmetNeeds(requirements, process.env);
 const title = missingRequirements.length > 0
   ? `Library connector discovery skipped — needs: ${missingRequirements.join(", ")}`
-  : "Add to your Library unifies all choices and previews hosted connectors";
+  : "Library starts with Cloud MCPs and keeps local MCP creation in Advanced";
 
-const expectedChoices = [
-  "Skill",
-  "Command",
-  "Agent",
-  "Plugin",
-  "Organization MCP",
-  "Workspace MCP",
-  "Connection",
-];
-const expectedConnectorCues = [
-  "Notion",
-  "Slack",
-  "Google Workspace",
-  "Microsoft 365",
-  "Linear",
-];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function organizationId(session: DenSession): Promise<string> {
-  const response = await denFetch(session, "/v1/me/orgs", {
-    headers: { authorization: `Bearer ${session.token}` },
-  });
-  const organizations = isRecord(response.body) && Array.isArray(response.body.orgs)
-    ? response.body.orgs.filter(isRecord)
-    : [];
-  const id = organizations[0] && typeof organizations[0].id === "string"
-    ? organizations[0].id
-    : "";
-  if (!response.response.ok || !id) {
-    throw new Error(`Resolving the test organization failed: HTTP ${response.response.status} ${response.text.slice(0, 500)}`);
-  }
-  return id;
-}
-
-test(title, async ({ evidence, place }) => {
+test(title, async ({ evidence, world, seed, user, probe, step }) => {
   needs(requirements);
-  const stamp = Date.now();
-  await using den = await server({
-    place,
-    org: {
-      name: `Library connector discovery ${stamp}`,
-      admin: { name: "Library Connector Admin" },
-    },
-  });
-  const orgId = await organizationId(den.admin);
-  await using desktop = await app({
-    den,
-    as: "admin",
-    place,
-  });
-
-  await desktop.client.send("Emulation.setDeviceMetricsOverride", {
-    width: 820,
-    height: 760,
-    deviceScaleFactor: 1,
-    mobile: false,
-  });
-  await go(desktop, `/workspace/${desktop.workspaceId}/extensions`);
-  await waitFor(desktop, `[...document.querySelectorAll("button")]
-    .some((button) => (button.textContent ?? "").trim() === "Add")`, {
-    timeoutMs: 90_000,
-    label: "signed-in Library Add control",
-  });
-  const bootstrap = await evalIn(
+  const { app: desktop, workspaceId, organizationId: orgId, denWebUrl } = world;
+  await user.see({ text: "OpenWork Cloud account and organization." }, { timeoutMs: 30_000 });
+  expect(await probe.storage("openwork.extension.enabled.google-workspace")).toBe(1);
+  const settingsText = await probe.text();
+  expect(settingsText).toContain("OpenWork Cloud account and organization.");
+  expect(settingsText).not.toContain("Google Workspace");
+  expect(settingsText).not.toMatch(/Google OAuth|Google Client ID|Google Client Secret/i);
+  evidence.recordAssertionEvidence(
+    "A stale local Google enabled flag cannot restore legacy Settings setup",
+    "The upgraded profile retains openwork.extension.enabled.google-workspace=1. Settings retains the Cloud account entry without restoring Google Workspace or local Google OAuth setup.",
+    true,
+  );
+  const bootstrap = await probe.eval(
     desktop,
-    `window.__OPENWORK_ELECTRON__.invokeDesktop("getDesktopBootstrapConfig")
+    () => (window.__OPENWORK_ELECTRON__.invokeDesktop("getDesktopBootstrapConfig")
       .then((config) => ({
         baseUrl: config.baseUrl,
         activeOrgId: localStorage.getItem("openwork.den.activeOrgId"),
-      }))`,
+      }))),
     { awaitPromise: true },
   );
   expect(bootstrap).toMatchObject({
-    baseUrl: den.ref.webUrl,
+    baseUrl: denWebUrl,
     activeOrgId: orgId,
   });
 
-  const addOpened = await evalIn(desktop, `(() => {
-    const button = [...document.querySelectorAll("button")]
-      .find((entry) => (entry.textContent ?? "").trim() === "Add");
-    if (!(button instanceof HTMLButtonElement)) return false;
-    button.click();
-    return true;
-  })()`);
-  expect(addOpened).toBe(true);
-  await waitFor(desktop, `(() => {
-    const dialog = document.querySelector('[role="dialog"]');
-    return dialog?.querySelectorAll('[data-testid="connection-logo-cues"] [data-connector-cue]').length === 5;
-  })()`, {
-    timeoutMs: 30_000,
-    label: "unified Library picker with representative connector logos",
+  await step("Ollama has its own Settings page with the existing local model setup", async () => {
+    await seed.evalIn(desktop, browserScript((id: string) => {
+      location.hash = `#/workspace/${id}/settings/ollama`;
+    }, [workspaceId]));
+    await user.see({ text: "Connect to Ollama and manage local models" }, { timeoutMs: 30_000 });
+    await user.see({ text: "Connect to a local Ollama instance and choose a model." });
+    expect(await probe.hash()).toBe(`#/workspace/${workspaceId}/settings/ollama`);
+    await user.notSee({ role: "button", label: "Add MCP" });
   });
 
-  const picker = await evalIn(desktop, `(() => {
-    const dialog = document.querySelector('[role="dialog"]');
-    const dialogRect = dialog?.getBoundingClientRect();
-    const continueButton = dialog
-      ? [...dialog.querySelectorAll('button')]
-          .find((button) => (button.textContent ?? '').trim() === 'Continue')
-      : null;
-    const continueRect = continueButton?.getBoundingClientRect();
-    const cueStrip = dialog?.querySelector('[data-testid="connection-logo-cues"]');
-    const cueTiles = dialog ? [...dialog.querySelectorAll('[data-connector-cue]')] : [];
-    const lightTileBackgrounds = cueTiles.map((tile) => getComputedStyle(tile).backgroundColor);
-    const previousTheme = document.documentElement.dataset.theme;
-    document.documentElement.dataset.theme = 'dark';
-    const darkTileBackgrounds = cueTiles.map((tile) => getComputedStyle(tile).backgroundColor);
-    if (previousTheme) {
-      document.documentElement.dataset.theme = previousTheme;
-    } else {
-      delete document.documentElement.dataset.theme;
+  await step("Library defaults to MCPs, Ready to use, and cards with only three type filters", async () => {
+    // Arrange the surface under test without exercising responsive Settings navigation.
+    await seed.evalIn(desktop, browserScript((id: string) => {
+      location.hash = `#/workspace/${id}/extensions`;
+    }, [workspaceId]));
+    await user.see({ role: "button", label: "Add to library" }, { timeoutMs: 90_000 });
+    await probe.eventually(() => probe.dom('header button[aria-label="Add to library"]:not(:disabled):not([aria-disabled="true"])'), {
+      within: 90_000,
+      label: "the signed-in admin's header Add to library is enabled",
+      until: (snapshot) => snapshot.elements.length === 1,
+    });
+    expect(await probe.hash()).toBe(`#/workspace/${workspaceId}/extensions`);
+    const filters = await probe.dom('[aria-label="Library filters"] button[aria-pressed]:not([aria-label])');
+    expect(filters.elements.map((element) => element.text)).toEqual(["MCPs", "Skills", "Plugins"]);
+    expect((await probe.dom('[aria-label="Library filters"] button[aria-pressed="true"]:not([aria-label])')).elements.map((element) => element.text)).toEqual(["MCPs"]);
+    expect((await probe.dom('[role="tab"][aria-selected="true"]')).elements).toMatchObject([{ text: expect.stringMatching(/^Ready to use\s*0$/) }]);
+    expect((await probe.dom('button[aria-label="Card view"][aria-pressed="true"]')).elements).toHaveLength(1);
+    expect((await probe.dom('button[aria-label="List view"][aria-pressed="true"]')).elements).toHaveLength(0);
+    expect((await probe.dom('button[aria-expanded="false"]')).elements).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringMatching(/^Advanced\b/) })]));
+    for (const label of ["All", "Apps", "Commands", "Agents", "Connections", "Show hidden", "Add", "Add workspace MCP"]) {
+      await user.notSee({ role: "button", label: new RegExp(`^${label}$`) });
     }
-    return {
-      choices: dialog
-        ? [...dialog.querySelectorAll('[data-kind-title]')]
-            .map((item) => (item.textContent ?? '').trim())
-        : [],
-      radioGroups: dialog?.querySelectorAll('[role="radiogroup"]').length ?? 0,
-      oldMakeSection: dialog?.textContent?.includes('WHAT ARE YOU MAKING') ?? false,
-      oldConnectSection: dialog?.textContent?.includes('OR CONNECT SOMETHING') ?? false,
-      opensDenCopy: dialog?.textContent?.includes('manage setup for this organization in OpenWork Den') ?? false,
-      cues: cueTiles.map((item) => item.getAttribute('title')),
-      logoLabels: dialog
-        ? [...dialog.querySelectorAll('[data-connector-cue] img, [data-connector-cue] [aria-label]')]
-            .map((item) => item.getAttribute('alt') || item.getAttribute('aria-label'))
-        : [],
-      cueStripWraps: cueStrip?.classList.contains('flex-wrap') ?? false,
-      lightTileBackgrounds,
-      darkTileBackgrounds,
-      dialogWithinViewport: Boolean(
-        dialogRect
-          && dialogRect.left >= 0
-          && dialogRect.right <= window.innerWidth
-          && dialogRect.top >= 0
-          && dialogRect.bottom <= window.innerHeight,
-      ),
-      continueVisible: Boolean(
-        continueRect
-          && continueRect.left >= 0
-          && continueRect.right <= window.innerWidth
-          && continueRect.top >= 0
-          && continueRect.bottom <= window.innerHeight,
-      ),
-      horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    };
-  })()`);
-  expect(picker).toMatchObject({
-    choices: expectedChoices,
-    radioGroups: 1,
-    oldMakeSection: false,
-    oldConnectSection: false,
-    opensDenCopy: true,
-    cues: expectedConnectorCues,
-    logoLabels: expectedConnectorCues.map((name) => `${name} logo`),
-    cueStripWraps: true,
-    dialogWithinViewport: true,
-    continueVisible: true,
-    horizontalOverflow: false,
+    await user.notSee({ role: "tab", label: /^All\b/ });
+    await user.notSee({ role: "textbox", label: "App name" });
+    await user.notSee({ testId: "library-add-choices" });
+    await user.notSee({ text: "Local MCP" });
+    const libraryText = await probe.text();
+    expect(libraryText).not.toContain("Voice Mode");
+    expect(libraryText).not.toContain("Ollama");
+    expect(libraryText).not.toMatch(/Google OAuth|Google Client ID|Google Client Secret/i);
+    expect((await probe.dom('[aria-label*="voice mode" i]')).elements).toHaveLength(0);
+    const add = await probe.dom('header button[aria-label="Add to library"]');
+    expect(add.elements).toHaveLength(1);
+    const addButton = add.elements[0];
+    if (!addButton) throw new Error("Library has no header Add to library control.");
+    expect(addButton.text).toBe("Add to library");
+    expect(addButton.rect.left).toBeGreaterThanOrEqual(0);
+    expect(addButton.rect.right).toBeLessThanOrEqual(820);
+    expect(addButton.rect.top).toBeGreaterThanOrEqual(0);
+    expect(addButton.rect.bottom).toBeLessThanOrEqual(760);
+    expect(filters.documentWidth).toBeLessThanOrEqual(filters.viewportWidth);
+    await user.screenshot();
   });
-  if (!isRecord(picker) || !Array.isArray(picker.lightTileBackgrounds) || !Array.isArray(picker.darkTileBackgrounds)) {
-    throw new Error("The Library picker layout facts were not an object.");
-  }
-  expect(picker.lightTileBackgrounds).toEqual(expectedConnectorCues.map(() => "rgb(255, 255, 255)"));
-  expect(picker.darkTileBackgrounds).toEqual(expectedConnectorCues.map(() => "rgb(255, 255, 255)"));
-  evidence.recordAssertionEvidence(
-    "Add to your Library is one responsive seven-choice surface with recognizable hosted-service cues",
-    `At 820×760 the picker rendered ${JSON.stringify(picker)}.`,
-    JSON.stringify(picker.choices) === JSON.stringify(expectedChoices)
-      && picker.radioGroups === 1
-      && picker.oldMakeSection === false
-      && picker.oldConnectSection === false
-      && JSON.stringify(picker.cues) === JSON.stringify(expectedConnectorCues)
-      && picker.dialogWithinViewport === true
-      && picker.continueVisible === true
-      && picker.horizontalOverflow === false,
-  );
 
-  await waitFor(desktop, `(() => {
-    const cues = [...document.querySelectorAll('[data-connector-cue]')];
-    return cues.length === 5 && cues.every((cue) => {
-      const image = cue.querySelector('img');
-      return image instanceof HTMLImageElement
-        && image.complete
-        && image.naturalWidth > 0;
+  await step("admin MCP Add requests this Den's MCP connections without local creation UI", async () => {
+    const libraryHash = await probe.hash();
+    const expectedUrl = new URL("/dashboard/mcp-connections", denWebUrl).toString();
+    const openedBefore = await probe.eventually(() => world.browserUrls.opened(), {
+      within: 10_000, label: "external-open requests before admin Add MCP",
     });
-  })()`, {
-    timeoutMs: 30_000,
-    label: "all five recognizable connector logos loaded",
-  });
-  {
-    const shot = await screenshot(desktop);
-    const seen = await validate(shot, [
-      "The Add to your Library dialog presents Skill, Command, Agent, Plugin, Organization MCP, Workspace MCP, and Connection as one continuous selection surface",
-      "The Connection choice visibly includes a compact row of recognizable service marks for Notion, Slack, Google Workspace, Microsoft 365, and Linear",
-      "The dialog has no separate WHAT ARE YOU MAKING or OR CONNECT SOMETHING sections",
-      "The dialog, descriptions, connector marks, Cancel button, and Continue button fit within the desktop viewport without clipping",
-    ]);
-    expect(seen.ok, seen.why).toBe(true);
-  }
-
-  const connectionSelected = await evalIn(desktop, `(() => {
-    const connection = document.querySelector('[role="radio"][data-kind="connection"]');
-    if (!(connection instanceof HTMLElement)) return false;
-    connection.click();
-    return true;
-  })()`);
-  expect(connectionSelected).toBe(true);
-  await waitFor(desktop, `document.querySelector('[role="radio"][data-kind="connection"]')
-    ?.getAttribute('aria-checked') === 'true'`, {
-    timeoutMs: 10_000,
-    label: "Connection selected in the unified picker",
-  });
-  const previousTheme = await evalIn(desktop, `document.documentElement.dataset.theme ?? ''`);
-  await evalIn(desktop, `document.documentElement.dataset.theme = 'dark'`);
-  try {
-    await waitFor(desktop, `document.documentElement.dataset.theme === 'dark'`, {
-      timeoutMs: 10_000,
-      label: "dark theme applied through the app theme attribute",
+    await user.click({ role: "button", label: "Add to library" });
+    await user.see({ testId: "library-add-choices" });
+    expect((await probe.dom('[data-testid="library-add-choices"] [role="radio"]')).elements).toHaveLength(3);
+    for (const kind of ["mcp", "skill", "plugin"]) {
+      expect((await probe.dom(`[data-kind="${kind}"]`)).elements).toHaveLength(1);
+    }
+    expect(await world.browserUrls.opened()).toEqual(openedBefore);
+    await user.press("Escape");
+    await user.notSee({ testId: "library-add-choices" });
+    expect(await world.browserUrls.opened()).toEqual(openedBefore);
+    await user.click({ role: "button", label: "Add to library" });
+    await user.click({ role: "button", label: "Continue" });
+    const openedAfter = await probe.eventually(() => world.browserUrls.opened(), {
+      within: 10_000,
+      label: "admin Add MCP issues a fresh external-open request",
+      until: (urls) => urls.length > openedBefore.length,
     });
-    await evalIn(desktop, `(() => {
-      for (const toast of document.querySelectorAll('[data-sonner-toast]')) {
-        const closeButton = toast.querySelector(
-          '[data-close-button], button[aria-label*="close" i]',
-        );
-        if (closeButton instanceof HTMLButtonElement) closeButton.click();
-      }
-      return true;
-    })()`);
-    await waitFor(desktop, `document.querySelectorAll('[data-sonner-toast]').length === 0`, {
-      timeoutMs: 10_000,
-      label: "unrelated test-world notifications dismissed before dark-theme evidence",
-    });
-    const shot = await screenshot(desktop);
-    const seen = await validate(shot, [
-      "The Add to your Library dialog is visibly rendered in a dark theme",
-      "Connection is the selected choice and remains in the same continuous list as the OpenWork creation and MCP choices",
-      "The Connection choice visibly includes recognizable marks for Notion, Slack, Google Workspace, Microsoft 365, and Linear",
-      "The dark-theme dialog, all seven choices, descriptions, connector marks, Cancel button, and Continue button fit within the desktop viewport without clipping",
-    ]);
-    expect(seen.ok, seen.why).toBe(true);
-  } finally {
-    await evalIn(
-      desktop,
-      previousTheme
-        ? `document.documentElement.dataset.theme = ${JSON.stringify(previousTheme)}`
-        : `delete document.documentElement.dataset.theme`,
+    expect(openedAfter).toHaveLength(openedBefore.length + 1);
+    expect(openedAfter.slice(openedBefore.length)).toEqual([expectedUrl]);
+    await user.notSee({ role: "textbox", label: "App name" });
+    await user.notSee({ text: "Add workspace MCP" });
+    await user.notSee({ testId: "library-add-choices" });
+    expect((await probe.dom('[role="dialog"]')).elements).toHaveLength(0);
+    expect(await probe.hash()).toBe(libraryHash);
+    expect(await probe.storage("openwork.den.activeOrgId")).toBe(orgId);
+    await user.see({ role: "button", label: "Add to library" });
+    expect((await probe.dom('header button[aria-label="Add to library"]:not(:disabled):not([aria-disabled="true"])')).elements).toHaveLength(1);
+    evidence.recordAssertionEvidence(
+      "Admin Cloud MCP Add requests the exact fixture Den MCP connections URL without local creation UI",
+      `Bootstrap context=${JSON.stringify(bootstrap)}; external-open count=${openedBefore.length}->${openedAfter.length}; captured URL=${openedAfter.at(-1)}; expected=${expectedUrl}; Library route and organization retained with zero dialogs. The fixture captures the final desktop boundary without launching an OS browser.`,
+      openedAfter.length === openedBefore.length + 1 && openedAfter.at(-1) === expectedUrl,
     );
-  }
-  const connectionContinued = await evalIn(desktop, `(() => {
-    const continueButton = [...document.querySelectorAll('[role="dialog"] button')]
-      .find((button) => (button.textContent ?? '').trim() === 'Continue');
-    if (!(continueButton instanceof HTMLButtonElement) || continueButton.disabled) return false;
-    continueButton.click();
-    return true;
-  })()`);
-  expect(connectionContinued).toBe(true);
-  await waitFor(desktop, `!document.querySelector('[role="dialog"]')
-    && decodeURIComponent(location.hash).endsWith('/extensions')
-    && [...document.querySelectorAll('button')]
-      .some((button) => (button.textContent ?? '').trim() === 'Add')`, {
-    timeoutMs: 20_000,
-    label: "Connection handoff closes cleanly without entering a native creation flow",
   });
 
-  const reopenedCleanly = await evalIn(desktop, `(() => {
-    const addButton = [...document.querySelectorAll('button')]
-      .find((button) => (button.textContent ?? '').trim() === 'Add');
-    if (!(addButton instanceof HTMLButtonElement)) return false;
-    addButton.click();
-    return true;
-  })()`);
-  expect(reopenedCleanly).toBe(true);
-  await waitFor(desktop, `document.querySelectorAll('[role="dialog"]').length === 1
-    && document.querySelectorAll('[data-testid="library-add-choices"]').length === 1`, {
-    timeoutMs: 20_000,
-    label: "clean Library picker state after returning from Den handoff",
+  for (const { filter, addLabel, emptyTitle, hint, formTitle } of [
+    { filter: "Skills", addLabel: "Create skill", emptyTitle: "No skills yet", hint: "Add reusable instructions for work your agents do often.", formTitle: "Create a skill" },
+    { filter: "Plugins", addLabel: "Add plugin", emptyTitle: "No plugins yet", hint: "Add a plugin to bring related skills and MCPs into your Library.", formTitle: "Create a plugin" },
+  ]) {
+    await step(`${filter} has its own empty state, search recovery, and separate header and empty-state actions`, async () => {
+      await user.click({ role: "button", label: filter });
+      await user.see({ text: emptyTitle });
+      await user.see({ text: hint });
+      expect((await probe.dom('[aria-label="Library filters"] button[aria-pressed="true"]:not([aria-label])')).elements.map((element) => element.text)).toEqual([filter]);
+      expect((await probe.dom('header button[aria-label="Add to library"]')).elements).toMatchObject([{ text: "Add to library" }]);
+      expect((await probe.dom('header button[aria-label="Add to library"]:not(:disabled):not([aria-disabled="true"])')).elements).toHaveLength(1);
+      await user.see({ role: "button", label: addLabel }, { text: addLabel });
+      await user.notSee({ role: "button", label: "Add MCP" });
+      await user.notSee({ role: "button", label: "Add workspace MCP" });
+      await user.type({ placeholder: "Search your library" }, "library-discovery-no-match", { replace: true });
+      await user.see({ text: "No library items match these filters." });
+      await user.notSee({ text: emptyTitle });
+      await user.click({ role: "button", label: "Clear filters" });
+      await user.see({ placeholder: "Search your library" }, { value: "" });
+      await user.see({ text: emptyTitle });
+      for (const entryPoint of ["header", "empty-state"]) {
+        if (entryPoint === "header") {
+          await user.click({ role: "button", label: "Add to library" });
+          await user.see({ testId: "library-add-choices" });
+          await user.click({ text: filter === "Skills" ? /^Skill$/ : /^Plugin$/ });
+          await user.click({ role: "button", label: "Continue" });
+        } else {
+          await user.click({ role: "button", label: addLabel });
+        }
+        await user.see({ text: formTitle });
+        await user.notSee({ role: "textbox", label: "App name" });
+        await user.notSee({ testId: "library-add-choices" });
+        expect((await probe.dom('[role="dialog"]')).elements).toHaveLength(1);
+        await user.press("Escape");
+        await user.notSee({ text: formTitle });
+        await user.see({ text: emptyTitle });
+      }
+    });
+  }
+
+  await step("only Advanced exposes the workspace MCP form and closing it restores Cloud-only inventory", async () => {
+    await user.click({ role: "button", label: "MCPs" });
+    await user.notSee({ role: "button", label: "Add workspace MCP" });
+    await user.click({ role: "button", label: /^Advanced\b/ });
+    await user.click({ role: "button", label: "Add workspace MCP" });
+    await user.see({ role: "textbox", label: "App name" });
+    expect((await probe.dom('[role="dialog"]')).elements).toHaveLength(1);
+    await user.press("Escape");
+    await user.notSee({ role: "textbox", label: "App name" });
+    await user.click({ role: "button", label: /^Advanced\b/ });
+    await user.notSee({ role: "button", label: "Add workspace MCP" });
+    await user.notSee({ text: "Local MCP" });
+    await user.see({ role: "button", label: "Add to library" });
+    expect((await probe.dom('header button[aria-label="Add to library"]:not(:disabled):not([aria-disabled="true"])')).elements).toHaveLength(1);
+    expect((await probe.dom('[role="dialog"]')).elements).toHaveLength(0);
+    await user.screenshot();
   });
-  const modalCount = await evalIn(desktop, `document.querySelectorAll('[role="dialog"]').length`);
-  expect(modalCount).toBe(1);
-  evidence.recordAssertionEvidence(
-    "Connection keeps organization context and returns without duplicate modal state",
-    `The active bootstrap organization was ${orgId} on ${den.ref.webUrl}; Connection closed without a native creation modal and reopening produced ${modalCount} dialog.`,
-    isRecord(bootstrap)
-      && bootstrap.activeOrgId === orgId
-      && bootstrap.baseUrl === den.ref.webUrl
-      && modalCount === 1,
-  );
 });

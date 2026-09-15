@@ -44,6 +44,7 @@ const baseInput: ContextProjectorInput = {
       activeTabId: "artifact-a",
     },
   },
+  pinnedSessionIds: [],
   availableAffordances: [],
 };
 
@@ -89,9 +90,23 @@ describe("OpenWork context projector", () => {
     expect(context.sidePanel.tabs).toEqual([]);
     expect(context.sidePanel.activeTabId).toBeNull();
   });
+
+  test("projects pinned session state", () => {
+    const context = buildOpenworkContext({
+      ...baseInput,
+      pinnedSessionIds: ["session-b"],
+    });
+
+    expect(context.conversations.pinnedSessionIds).toEqual(["session-b"]);
+    expect(context.resources.find((resource) => resource.ref === "session:workspace-b:session-b")?.state.pinned)
+      .toBe(true);
+    expect(context.resources.find((resource) => resource.ref === "session:workspace-a:session-a")?.state.pinned)
+      .toBe(false);
+  });
 });
 
 const splitWorkbench: WorkbenchSnapshot = {
+  sideChats: {},
   revision: 5,
   primary: { workspaceId: "workspace-a", workspaceTitle: "Workspace A", sessionId: "session-a", title: "Current plan" },
   tabs: [
@@ -130,6 +145,7 @@ function contextForRoute(route: string) {
         activeTabId: "browser-one",
       },
     },
+    pinnedSessionIds: [],
     availableAffordances: [],
   });
 }

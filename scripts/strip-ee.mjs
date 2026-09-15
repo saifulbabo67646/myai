@@ -69,6 +69,39 @@ function replaceOnce(rel, replacements) {
   writeText(rel, text);
 }
 
+/** Remove a contiguous top-level block: `startRegex` line through the first `endLine`. */
+function dropBlock(rel, startRegex, endLine, description) {
+  if (!existsSync(join(ROOT, rel))) return;
+  const lines = readText(rel).split("\n");
+  const start = lines.findIndex((line) => startRegex.test(line));
+  if (start === -1) { log(`${rel}: already applied (${description})`); return; }
+  let end = -1;
+  for (let i = start + 1; i < lines.length; i++) { if (lines[i] === endLine) { end = i; break; } }
+  if (end === -1) { log(`WARNING ${rel}: no terminator for ${description} — inspect manually`); return; }
+  lines.splice(start, end - start + 1);
+  writeText(rel, lines.join("\n"));
+  log(`${rel}: dropped ${end - start + 1} line(s) — ${description}`);
+}
+
+/** Remove a GitHub Actions step by its `- name:` text (through the next step / dedent). */
+function dropYamlStep(rel, nameSubstring) {
+  if (!existsSync(join(ROOT, rel))) return;
+  const lines = readText(rel).split("\n");
+  const start = lines.findIndex((line) => /^\s*- name:/.test(line) && line.includes(nameSubstring));
+  if (start === -1) { log(`${rel}: already applied (step "${nameSubstring}")`); return; }
+  const indent = lines[start].search(/\S/);
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const currentIndent = line.search(/\S/);
+    if (currentIndent < indent || (currentIndent === indent && /^\s*- /.test(line))) { end = i; break; }
+  }
+  lines.splice(start, end - start);
+  writeText(rel, lines.join("\n"));
+  log(`${rel}: dropped step "${nameSubstring}" (${end - start} line(s))`);
+}
+
 // ---------------------------------------------------------------------------
 // 1. EE directories and Den-only files
 // ---------------------------------------------------------------------------
@@ -104,11 +137,40 @@ for (const rel of [
   ".github/workflows/release-daytona-snapshot.yml",
   ".github/workflows/update-models.yml",
   "evals/scripts/dev-den.ts",
-  // Patch consumed only by EE den-db; pnpm errors on unused patches.
+  // Patches consumed only by EE den-db/den-api; pnpm errors on unused patches.
   "patches/@better-auth__drizzle-adapter@1.7.0-beta.10.patch",
+  "patches/@better-auth__sso@1.7.0-beta.10.patch",
   // spec-impact tool test uses ee fixture paths; port with MIT fixtures later.
   "evals/specs/spec-impact.test.ts",
   "LICENSES/LicenseRef-OpenWork-EE.txt",
+  // --- Added by the WP-1 catch-up sync (upstream reintroduced EE coupling) ---
+  // Den task-analytics uploader: its event/settings schemas are EE contracts.
+  "apps/app/src/app/lib/models-task-analytics.ts",
+  "apps/app/tests/connector-chat-round-trip.test.ts",
+  // Generated Den control-plane API spec, published under the EE License.
+  "packages/docs/openapi.json",
+  // SDK generator drives @openwork-ee/den-api; the committed client stays.
+  "packages/sdk/script/generate.mjs",
+  // Exercises scripts/dev-local.mjs, which this script removes.
+  "scripts/dev-local-env.test.mjs",
+  // Eval fixtures/worlds that boot the EE gateway or den-db directly.
+  "evals/packages/env/src/inference.ts",
+  "evals/packages/labs/src/models-analytics-fixture.mjs",
+  "evals/packages/labs/src/models-egress-guard.mjs",
+  "evals/packages/labs/src/paid-usage-fixture.mjs",
+  "evals/worlds/managed-inference.ts",
+  "evals/worlds/models-analytics.ts",
+  "evals/worlds/org-model-analytics.ts",
+  // Specs bound to the EE worlds/fixtures removed just above.
+  "evals/specs/managed-inference.test.ts",
+  "evals/specs/managed-models-dpa.test.ts",
+  "evals/specs/models-analytics-upgrade.e2e.test.ts",
+  "evals/specs/org-model-analytics.e2e.test.ts",
+  "evals/specs/paid-usage-settlement.test.ts",
+  // EE-only CI lanes (Den API contract, SDK codegen, Daytona).
+  ".github/workflows/api-contract.yml",
+  ".github/workflows/ci-sdk.yml",
+  ".github/workflows/daytona-e2e.yml",
   // Superseded planning docs (kept out of re-imports on future syncs).
   "docs/myai-pilot-plan.md",
   "docs/superpowers",
@@ -122,8 +184,8 @@ for (const rel of [
 filterLines("pnpm-workspace.yaml", [/"ee\/(apps|packages)\/\*"/], "ee workspace globs");
 filterLines(
   "pnpm-workspace.yaml",
-  [/@better-auth\/drizzle-adapter@1\.7\.0-beta\.10/],
-  "EE-only patchedDependencies entry",
+  [/@better-auth\/drizzle-adapter@1\.7\.0-beta\.10/, /@better-auth\/sso@1\.7\.0-beta\.10/],
+  "EE-only patchedDependencies entries",
 );
 
 function pruneScripts(rel, extraDenyList = []) {
@@ -145,6 +207,8 @@ function pruneScripts(rel, extraDenyList = []) {
 }
 pruneScripts("package.json", ["dev:web", "dev:web-local", "build:web"]);
 pruneScripts("evals/package.json", ["dev:den"]);
+// The generator invokes @openwork-ee/den-api; the committed client stays usable.
+pruneScripts("packages/sdk/package.json", ["generate", "generate:check"]);
 
 // turbo.json: keep only OPENWORK_* global env (the rest is Den/EE-only).
 if (existsSync(join(ROOT, "turbo.json"))) {
@@ -232,40 +296,57 @@ replaceOnce("packages/openwork-bootstrap/bin/openwork.mjs", [
 ]);
 
 // ---------------------------------------------------------------------------
-// 6. Evals: surgical EE removal in shared runner, then EE spec sweep
+// 5c. EE coupling reintroduced by upstream (WP-1 catch-up sync)
 // ---------------------------------------------------------------------------
-replaceOnce("evals/runner/prepare-stack.ts", [
+// Den task-analytics: drop the workspace dependency and the single call site
+// of the uploader module removed in section 1.
+filterLines("apps/app/package.json", [/"@openwork-ee\/telemetry-contracts":/], "EE telemetry-contracts dependency");
+filterLines(
+  "apps/app/src/react-app/domains/session/sync/session-sync.ts",
+  [/from "@\/app\/lib\/models-task-analytics"/, /^\s*observeModelsTaskEvent\(/],
+  "Den task-analytics import and call site",
+);
+filterLines("evals/packages/env/src/index.ts", [/\.\/inference\.ts/], "EE inference fixture re-export");
+
+// Eval worlds that import EE modules at runtime; their specs are removed above.
+dropBlock("evals/worlds/infra.ts", /^export async function remoteSessionServerWorld\(/, "}", "EE remote-session world");
+dropBlock("evals/worlds/infra.ts", /^export type \{$/, '} from "../../ee/apps/den-api/src/mcp/remote-session-capabilities.js";', "EE remote-session type re-export");
+dropBlock("evals/worlds/library.ts", /^export async function mcpAppInlineHost\(/, "}", "EE inline-host world");
+dropBlock("evals/worlds/library.ts", /^export async function remoteMcpApps\(/, "}", "EE remote-mcp-apps world");
+
+// Comment-only EE pointer in a mock fixture (same treatment as section 5b).
+replaceOnce("evals/packages/labs/src/mock-cloud-skills.ts", [
   [
-    'console.error("[openwork/evals] preparing shared local Den and Electron runtime once...");',
-    'console.error("[openwork/evals] preparing shared local Electron runtime once...");',
-    "banner text",
-  ],
-  [
-    `  await run("pnpm", ["--filter", "@openwork-ee/den-db", "build"]);\n`,
-    "",
-    "drop den-db build",
-  ],
-  [
-    `    run("pnpm", ["--filter", "@openwork-ee/utils", "build"]),\n`,
-    "",
-    "drop ee utils build",
-  ],
-  [
-    `  const nextEnvPath = join(REPO_ROOT, "ee/apps/den-web/next-env.d.ts");
-  const hadNextEnv = await readable(nextEnvPath);
-  const nextEnv = hadNextEnv ? await readFile(nextEnvPath) : null;
-  try {
-    await run("pnpm", ["--filter", "@openwork-ee/den-web", "build"]);
-  } finally {
-    if (nextEnv) await writeFile(nextEnvPath, nextEnv);
-    else if (!hadNextEnv) await rm(nextEnvPath, { force: true });
-  }
-  await rm(join(REPO_ROOT, "ee/apps/den-web/.next/dev"), { recursive: true, force: true });
-`,
-    "",
-    "drop den-web build block",
+    "// It mirrors ee/apps/den-api/src/mcp/agent.ts (index shape, standard SKILL.md",
+    "// It mirrors the hosted control plane's MCP agent (index shape, standard SKILL.md",
+    "cloud-skills mock comment",
   ],
 ]);
+
+// Upstream CI keeps MIT lanes but mixes in EE steps; drop only those steps.
+// NOTE: .github/** is WP-2's ownership — these trims exist solely to keep the
+// EE scan clean after a sync and should be superseded by WP-2's CI curation.
+dropYamlStep(".github/workflows/ci-tests.yml", "Verify shared encrypted receipt retention against Redis");
+dropYamlStep(".github/workflows/ci-tests.yml", "Run Den API tests");
+dropYamlStep(".github/workflows/ci-tests.yml", "Validate models snapshot");
+filterLines(
+  ".github/workflows/ci-tests.yml",
+  [/files\[0\]\.filename === "ee\/apps\/gateway/],
+  "EE snapshot-lane classifier line",
+);
+replaceOnce(".github/workflows/ci-tests.yml", [
+  [
+    " && pnpm --filter @openwork-ee/den-api test:authoring",
+    "",
+    "drop EE authoring-contract step suffix",
+  ],
+]);
+
+// ---------------------------------------------------------------------------
+// 6. Evals: surgical EE removal in shared runner, then EE spec sweep
+// ---------------------------------------------------------------------------
+// Upstream rewrote evals/runner/prepare-stack.ts to boot lazily; its Den/EE
+// build steps are gone, so the former surgical edits here are obsolete.
 
 const specEEPattern = /@openwork-ee|ee\/apps|ee\/packages|selfHost|den-stack/;
 // The boundary guard quotes EE identifiers on purpose; never sweep it.
@@ -293,6 +374,54 @@ if (removedSpecs.length > 0) {
   log(`removed ${removedSpecs.length} EE-dependent eval spec(s)`);
   for (const spec of removedSpecs) log(`  - ${spec}`);
 }
+
+// The journey catalog throws if a registered e2e spec is absent, so drop the
+// entries whose specs the EE sweep removed. Generic on purpose: future syncs
+// add and remove journeys without needing a new pattern here.
+const journeyRel = "evals/scripts/journey-catalog.mjs";
+if (existsSync(join(ROOT, journeyRel))) {
+  const lines = readText(journeyRel).split("\n");
+  const kept = [];
+  const dropped = [];
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^(\s+)['"]([A-Za-z0-9._-]+\.e2e\.test\.ts)['"]:\s*\{/.exec(lines[i]);
+    if (!match || existsSync(join(ROOT, "evals/specs", match[2]))) { kept.push(lines[i]); continue; }
+    // Consume the whole entry: single-line `{ ... },` or a braced block.
+    let depth = 0;
+    let end = i;
+    for (let j = i; j < lines.length; j++) {
+      for (const character of lines[j]) {
+        if (character === "{") depth += 1;
+        else if (character === "}") depth -= 1;
+      }
+      if (depth <= 0) { end = j; break; }
+    }
+    dropped.push(match[2]);
+    i = end;
+  }
+  if (dropped.length > 0) {
+    writeText(journeyRel, kept.join("\n"));
+    log(`${journeyRel}: deregistered ${dropped.length} journey(s) for removed spec(s)`);
+    for (const spec of dropped) log(`  - ${spec}`);
+  }
+}
+
+// journey-ci.test.mjs pins upstream's exact critical-journey mix. The EE
+// journeys are gone here, so derive the count and make the live-model claim
+// conditional — same intent, independent of which journeys survive the sweep.
+replaceOnce("evals/scripts/journey-ci.test.mjs", [
+  [
+    `  assert.equal(selected.length, 4);
+  assert(selected.some(value => value.placement === 'local'));
+  assert(selected.some(value => value.model === 'live'));`,
+    `  assert.equal(selected.length, entries.filter(value => value.critical).length);
+  assert(selected.some(value => value.placement === 'local'));
+  if (entries.some(value => value.critical && value.model === 'live')) {
+    assert(selected.some(value => value.model === 'live'));
+  }`,
+    "derive critical-journey expectations",
+  ],
+]);
 
 // Prune the spec-impact contract snapshot: drop `ee/` globs and references to
 // spec files that no longer exist. Keeps evals/scripts/spec-impact.mjs (used by
@@ -341,6 +470,8 @@ if (existsSync(join(ROOT, "ee"))) {
 // allow-list exactly these and nothing else.
 const DORMANT_ALLOWLIST = [
   "evals/specs/myai-ee-free-boundary.test.ts",
+  // Asserts the spec classifier detects EE paths; the path is a test fixture.
+  "evals/scripts/spec-boundary-ratchet.test.mjs",
   "evals/drivers/posthog-capture-mock.mjs",
   "evals/packages/behaviors/src/cloud-plugins.ts",
   "evals/packages/env/src/den.ts",
