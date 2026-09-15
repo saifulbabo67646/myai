@@ -1,0 +1,33 @@
+{
+  "name": "@openwork/evals",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:pr": "vitest run --config vitest.config.ts --project pr",
+    "test:e2e": "vitest run --config vitest.config.ts --project e2e",
+    "artifacts:index": "node packages/test-artifacts/bin/artifact-index.mjs",
+    "artifacts:publish": "node packages/test-artifacts/bin/publish-pr.mjs",
+    "docs:shots": "node docs-shots/run.ts",
+    "evidence:judge": "node packages/test-evidence/bin/test-evidence-judge.mjs",
+    "provision:org-connector-two-members": "node scripts/provision-org-connector-two-members.ts",
+    "lint:layers": "depcruise --config .dependency-cruiser.cjs packages specs bin docs-shots runner scripts",
+    "test": "pnpm run lint:layers && node --test runner/*.test.ts packages/*/test/*.test.ts bin/*.test.mjs",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@openwork/behaviors": "workspace:*",
+    "@openwork/cdp": "workspace:*",
+    "@openwork/test-artifacts": "workspace:*",
+    "@openwork/test-evidence": "workspace:*",
+    "@openwork/hosts": "workspace:*",
+    "@openwork/labs": "workspace:*",
+    "@openwork/matchers": "workspace:*",
+    "@openwork/testkit": "workspace:*",
+    "@openwork/world": "link:../packages/world"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "18.1.0",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@11.4.0"
+}

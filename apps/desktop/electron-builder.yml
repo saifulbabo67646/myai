@@ -1,0 +1,11 @@
+extends: ./electron-builder.base.yml
+appId: bd.myai.app
+productName: myai
+protocols:
+  - name: myai
+    schemes:
+      - myai
+      - openwork
+linux:
+  executableName: myai
+artifactName: myai-${os}-${arch}-${version}.${ext}

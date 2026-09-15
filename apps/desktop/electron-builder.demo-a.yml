@@ -1,0 +1,10 @@
+extends: electron-builder.yml
+appId: bd.myai.app.demo.admin
+productName: myai Demo A
+protocols: []
+directories:
+  output: dist-electron-demo-a
+mac:
+  identity: null
+  target:
+    - dir

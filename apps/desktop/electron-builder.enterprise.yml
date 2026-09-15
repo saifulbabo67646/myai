@@ -1,0 +1,19 @@
+extends: ./electron-builder.base.yml
+appId: bd.myai.app
+productName: myai Enterprise
+extraMetadata:
+  openworkDistribution: enterprise
+protocols:
+  - name: myai Enterprise
+    schemes:
+      - myai
+      - openwork
+publish:
+  - provider: github
+    owner: saifulbabo67646
+    repo: myai
+    releaseType: release
+    channel: enterprise
+linux:
+  executableName: myai-enterprise
+artifactName: myai-enterprise-${os}-${arch}-${version}.${ext}

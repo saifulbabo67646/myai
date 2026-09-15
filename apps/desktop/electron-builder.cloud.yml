@@ -1,0 +1,19 @@
+extends: ./electron-builder.base.yml
+appId: bd.myai.app
+productName: myai Cloud
+extraMetadata:
+  openworkDistribution: cloud
+protocols:
+  - name: myai Cloud
+    schemes:
+      - myai
+      - openwork
+publish:
+  - provider: github
+    owner: saifulbabo67646
+    repo: myai
+    releaseType: release
+    channel: cloud
+linux:
+  executableName: myai-cloud
+artifactName: myai-cloud-${os}-${arch}-${version}.${ext}

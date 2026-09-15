@@ -1,0 +1,11 @@
+# Machine-readable licensing map (REUSE spec, https://reuse.software).
+# Mirrors the human-readable statement in /LICENSE: everything is MIT.
+# This repo contains no OpenWork EE-licensed code (see docs/myai-plan.md).
+# Third-party components keep their original licenses per their own notices.
+version = 1
+
+[[annotations]]
+path = "**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026-present Different AI, Inc."
+SPDX-License-Identifier = "MIT"
