@@ -353,9 +353,12 @@ const DORMANT_ALLOWLIST = [
 ];
 const scanDirs = ["apps", "packages", "scripts", "worlds", "evals", "packaging", ".github", ".devcontainer"];
 const leftovers = [];
+const SCAN_SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", ".next", ".turbo", "results", "test-runs", "tmp",
+]);
 function scan(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    if (SCAN_SKIP_DIRS.has(entry.name)) continue; // generated output; git history guard covers tracked content
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) scan(abs);
     else if (/\.(ts|tsx|mjs|cjs|js|json|yml|yaml|sh|toml)$/.test(entry.name)) {
