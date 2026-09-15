@@ -104,6 +104,8 @@ for (const rel of [
   ".github/workflows/release-daytona-snapshot.yml",
   ".github/workflows/update-models.yml",
   "evals/scripts/dev-den.ts",
+  // Patch consumed only by EE den-db; pnpm errors on unused patches.
+  "patches/@better-auth__drizzle-adapter@1.7.0-beta.10.patch",
   // spec-impact tool test uses ee fixture paths; port with MIT fixtures later.
   "evals/specs/spec-impact.test.ts",
   "LICENSES/LicenseRef-OpenWork-EE.txt",
@@ -118,6 +120,11 @@ for (const rel of [
 // 2. Workspace, task runner, and package script pruning
 // ---------------------------------------------------------------------------
 filterLines("pnpm-workspace.yaml", [/"ee\/(apps|packages)\/\*"/], "ee workspace globs");
+filterLines(
+  "pnpm-workspace.yaml",
+  [/@better-auth\/drizzle-adapter@1\.7\.0-beta\.10/],
+  "EE-only patchedDependencies entry",
+);
 
 function pruneScripts(rel, extraDenyList = []) {
   if (!existsSync(join(ROOT, rel))) return;
@@ -261,6 +268,8 @@ replaceOnce("evals/runner/prepare-stack.ts", [
 ]);
 
 const specEEPattern = /@openwork-ee|ee\/apps|ee\/packages|selfHost|den-stack/;
+// The boundary guard quotes EE identifiers on purpose; never sweep it.
+const SPEC_SWEEP_EXEMPT = new Set(["myai-ee-free-boundary.test.ts"]);
 function sweepSpecs(dir) {
   if (!existsSync(dir)) return [];
   const removed = [];
@@ -268,7 +277,11 @@ function sweepSpecs(dir) {
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) {
       removed.push(...sweepSpecs(abs));
-    } else if (entry.name.endsWith(".test.ts") && specEEPattern.test(readFileSync(abs, "utf8"))) {
+    } else if (
+      entry.name.endsWith(".test.ts")
+      && !SPEC_SWEEP_EXEMPT.has(entry.name)
+      && specEEPattern.test(readFileSync(abs, "utf8"))
+    ) {
       rmSync(abs);
       removed.push(relative(ROOT, abs));
     }
@@ -327,6 +340,7 @@ if (existsSync(join(ROOT, "ee"))) {
 // to the Daytona eval lane and mock drivers; listed so the guard test can
 // allow-list exactly these and nothing else.
 const DORMANT_ALLOWLIST = [
+  "evals/specs/myai-ee-free-boundary.test.ts",
   "evals/drivers/posthog-capture-mock.mjs",
   "evals/packages/behaviors/src/cloud-plugins.ts",
   "evals/packages/env/src/den.ts",
