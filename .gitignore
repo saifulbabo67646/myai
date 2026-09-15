@@ -75,3 +75,6 @@ evals/results/
 
 # Warden local run logs
 .warden/logs/
+
+# agent/tooling state (never commit)
+.commandcode/
