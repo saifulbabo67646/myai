@@ -16,6 +16,11 @@ This repo contains **no OpenWork Enterprise Edition (EE) code** and never
 will. The single source of truth for product, licensing, and phasing is
 `docs/myai-plan.md`.
 
+**Working as an agent here:** claim exactly one work package (WP) from
+`docs/myai-plan.md` §9 — it defines the dependency graph, per-WP file
+ownership, the agent contract (§9.1), and observable exit criteria. One WP =
+one `wp/<id>-<slug>` branch = one PR. Never touch paths owned by another WP.
+
 ## Repo rules (must follow)
 
 - This repo was snapshot-imported (no upstream git history). Record of origin:

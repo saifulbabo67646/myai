@@ -21,9 +21,19 @@ every upstream sync (see docs/myai-plan.md §2).
 
 1. This repo never gets an `upstream` remote and never merges upstream git
    history: EE blobs must not exist anywhere in `.git`, so the repo stays
-   provably EE-free and publishable at any time.
-2. Syncs are patch-based through the tracking fork:
-   `git -C <tracking-fork> diff <UPSTREAM_BASE>..upstream/dev -- . ':(exclude)ee'`
-   → apply 3-way here → re-run `scripts/strip-ee.mjs` → run guard tests →
-   update `UPSTREAM_BASE` in this file.
+   provably EE-free and publishable at any time. All merges happen in the
+   private tracking fork; this repo receives **stripped tree snapshots only**.
+2. Sync ritual (vendor-branch, executed in the tracking fork):
+   1. Fork: `git switch myai-main` (product-truth branch; bootstrap once from
+      `branding`), rsync the public repo's current tree over it (exclude
+      `.git`), commit `import myai@<public-sha>`.
+   2. Fork: `git fetch upstream && git merge upstream/dev` — resolve conflicts
+      here, where full 3-way context exists.
+   3. Fork: `node scripts/strip-ee.mjs` (removes everything the merge
+      reintroduced), commit.
+   4. Public repo: rsync the fork's `myai-main` tree in (exclude `.git`), run
+      guard tests + typecheck + build, commit `sync: upstream <sha>`, push,
+      and update `UPSTREAM_BASE` in this file.
 3. Licensing red lines and clean-room rules: docs/myai-plan.md §1.
+4. Agent execution model (work packages, ownership, exit criteria):
+   docs/myai-plan.md §9.

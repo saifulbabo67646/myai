@@ -76,11 +76,12 @@ and eventually archived.
 - Layout: upstream structure stays intact (`apps/`, `packages/`, `evals/`, `worlds/`) to keep
   future upstream syncs cheap; the new myai control-plane server is added as a new workspace
   (proposed: `apps/myai-server`).
-- **Upstream sync ritual (patch-based, through the tracking fork):** update the tracking fork's
-  `dev` mirror (`git fetch upstream && git merge --ff-only upstream/dev`) → generate an EE-excluded
-  diff from `UPSTREAM_BASE` (`git -C <fork> diff <base>..upstream/dev -- . ':(exclude)ee'`) →
-  apply 3-way in this repo → re-run `node scripts/strip-ee.mjs` → run guard tests → update
-  `UPSTREAM_BASE` in `PROVENANCE.md` → commit. myai changes stay in small, separate commits.
+- **Upstream sync ritual (vendor-branch, corrected 2026-09-16):** merges never happen in this
+  repo (it has no upstream objects, so 3-way patch application is impossible — and must stay
+  impossible to keep `.git` EE-free). All merging happens on the tracking fork's `myai-main`
+  branch: import the public tree → `git merge upstream/dev` with full context → re-run
+  `scripts/strip-ee.mjs` → rsync the stripped tree back here → guards → snapshot commit. Full
+  recipe: `PROVENANCE.md` rule 2. myai changes stay in small, separate commits.
 - The old fork (`/Users/saiful/Desktop/work/openwork`) is the **tracking fork**: kept private for
   upstream mirroring, inspiration, and learning. It receives no product work; its GitHub origin is
   to be archived once this repo has its own remote.
@@ -328,36 +329,175 @@ from `@openwork/testkit` (`.e2e.test.ts` for app-driving E2E). Verdicts: `Passed
 observable assertions; skips never pass. Phase 0 guards + Phase 1 acceptance path + Phase 2/3
 regression checks are all expressed there. Docs-only changes may skip runtime proof (say so).
 
-## 9. First-week task list
+## 9. Execution — work packages for parallel agents
 
-1. ✅ Create the new repo; import MIT tree; write `scripts/strip-ee.mjs`; commit EE-free baseline.
-   [Phase 0 — done 2026-09-16 at `/Users/saiful/Desktop/work/myai`; GitHub remote TBD]
-2. ✅ Prune workspace/root scripts/turbo/CI/packaging per Section 3; remove the EE eval specs
-   (31 swept + `spec-impact.test.ts`); EE reference scan clean.
-3. ✅ Phase 0 guard added: `evals/specs/myai-ee-free-boundary.test.ts` (no `ee/` tree, no EE-scope
-   deps in any manifest, no `ee/` path in any git object/history, pruned workspace globs,
-   LICENSE/NOTICE present) — green. URL/branding guards activate with Phase 2/3 work.
-   Phase 0 verification record (2026-09-16, this machine): root + evals `pnpm install` clean;
-   `pnpm typecheck` (@openwork/app) green; `pnpm build` (desktop) green; evals `lint:layers`
-   clean (443 modules) and 218/218 infra self-tests pass; headless world (`pnpm world up
-   ./worlds/dev-headless.ts` with `OPENWORK_OPENCODE_BIN` → staged sidecar) reached web+server
-   HTTP 200; sample pr specs green (`myai-ee-free-boundary`, `three-desktop-builds`,
-   `alpha-update-eligibility`). Known pre-existing debt: evals `tsc -p .` reports 44 errors in
-   untouched upstream specs (cross-boundary .mjs/.js imports) present at the base snapshot — not
-   a Phase 0 regression. Env note: this machine needed `bun` (1.3.10, CI-pinned) installed; the
-   dev world also prints `denTarget: https://app.openworklabs.com` — a Phase 2 neutralization
-   target.
-4. Decide license for myai-authored code (MIT vs proprietary carve-out) and update root
-   `LICENSE` + `REUSE.toml` accordingly. Baseline: repo stays MIT (§1.4 notices in place).
-5. Catch-up sync `UPSTREAM_BASE 03664d1f0 → upstream/dev fa9705458` (~670 commits) via the
-   Section 2 patch ritual — first real exercise of the sync machinery.
-6. Follow-ups from the strip: port `spec-impact.test.ts` with MIT fixture paths; clean up dormant
-   Den/Daytona eval infra (`evals/packages/{env,hosts,testkit}` den modules,
-   `.devcontainer/start-daytona-server.sh`) once the myai server replaces the Den lane.
-   ✅ GitHub remote decided 2026-09-16: public `saifulbabo67646/myai` (old origin renamed to
-   `myai-old`, archival pending). Actions + Dependabot disabled until CI workflows are curated
-   for myai (upstream's release/runner infrastructure does not apply).
-7. Scaffold `apps/myai-server`: better-auth + SQLite (Drizzle) + seam interface + health routes;
-   write the first acceptance test (4.8 path) red, then implement to green. [Phase 1]
-8. Phase 2 endpoint inventory → per-surface disable/redirect/keep-local decisions; make server
-   base URL fully build-configurable with no `openworklabs.com` default in release builds.
+This section is the dispatch board. Each work package (WP) is self-contained for one AI agent
+(or one human). Design sections (§3–§6) define what to build; WP cards define scope, file
+ownership, dependencies, and observable completion.
+
+### 9.1 Agent contract (applies to every WP)
+
+- Start by reading: `AGENTS.md` (red lines, proof model), §1 of this document (licensing),
+  `PROVENANCE.md` (repo topology and sync ritual). For WP-4/WP-6/WP-7: also §1.3 clean-room rules.
+- One WP = one branch `wp/<id>-<slug>` = one PR against `main`. Never commit to `main` directly.
+- Touch only the paths in your WP's ownership list. If you must touch another WP's paths, stop
+  and note it in the PR — cross-ownership conflicts are resolved by humans, not by agents.
+- Done = observable: run the exit commands, paste real output into the PR. Verdict `Passed` only
+  when every listed check is green; skips never pass (repo proof model, AGENTS.md).
+- Every PR runs the repo-wide invariant green:
+  `pnpm --dir evals exec vitest run --project pr specs/myai-ee-free-boundary.test.ts`
+- Environment: pnpm 11.4.0, Node 24, bun 1.3.10 (`~/.bun/bin` must be on PATH); headless-world
+  runs need `OPENWORK_OPENCODE_BIN=$PWD/apps/desktop/resources/sidecars/opencode` (staged by
+  `pnpm build`).
+- Keep commits small; update the WP status table (9.2) inside your PR.
+
+### 9.2 Dependency graph, lanes, and status
+
+```text
+WP-1 catch-up sync (SOLO — critical path; no other WP runs while it is in flight)
+   │
+   ├─→ WP-2 CI curation                ┐
+   ├─→ WP-3 endpoint neutralization    │  four parallel lanes
+   ├─→ WP-5 branding completion        │  (WP-4 additionally gated on DEC-1)
+   └─→ WP-4 myai-server MVP            ┘
+             │                │
+             │ 4a API contract (early deliverable, unblocks WP-6)
+             ▼                ▼
+        WP-7 deployment   WP-6 desktop integration (needs WP-3 + WP-4a)
+
+WP-8 housekeeping/decisions: anytime, owner = human
+```
+
+| WP | Name | Depends on | Lane | Status |
+|----|------|-----------|------|--------|
+| WP-0 | Phase 0 bootstrap | — | — | ✅ done 2026-09-16 |
+| WP-1 | Catch-up sync to upstream | WP-0 | solo (critical path) | ready |
+| WP-2 | CI curation + guard hardening | WP-1 | A | waiting |
+| WP-3 | Endpoint neutralization (Phase 2) | WP-1 | B | waiting |
+| WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | blocked on DEC-1 |
+| WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | waiting |
+| WP-6 | Desktop ↔ server integration | WP-3 + WP-4a | D | waiting |
+| WP-7 | Deployment packaging + docs | WP-4 green | C | waiting |
+| WP-8 | Housekeeping & human decisions | — | anytime | open |
+
+### 9.3 WP cards
+
+**WP-0 — Phase 0 bootstrap. ✅ Done 2026-09-16.**
+EE-free snapshot baseline (`e512d50`), pruned lockfile (`04a8013`), boundary guard
+(`4dc687f`), published to public `saifulbabo67646/myai` with Actions/Dependabot disabled
+(`9cdac04`). Evidence: guard green; `pnpm typecheck` (@openwork/app) green; desktop `pnpm build`
+green; evals `lint:layers` clean (443 modules) + 218/218 self-tests; headless world web+server
+HTTP 200; deep history scan 0 EE objects. Known pre-existing debt: evals `tsc -p .` reports 44
+errors in untouched upstream specs (cross-boundary `.mjs` imports) — present at base snapshot,
+not a regression; no WP fixes them opportunistically.
+
+**WP-1 — Catch-up sync to upstream (`03664d1f0` → `fa9705458` or newer, ~670 commits).**
+- Crew: ONE agent, solo. All other WPs pause while WP-1 is in flight (it touches the whole tree).
+- Method: the vendor-branch ritual in `PROVENANCE.md` rule 2, bootstrapping `myai-main` in the
+  tracking fork from `branding`. Merges happen ONLY in the fork; the public repo receives one
+  stripped snapshot commit `sync: upstream <sha>`.
+- Expected conflict hotspots (myai-owned files): `AGENTS.md`, `LICENSE`, `NOTICE`,
+  `PROVENANCE.md`, `REUSE.toml`, `docs/myai-plan.md`, `scripts/strip-ee.mjs`,
+  `evals/specs/myai-ee-free-boundary.test.ts`, `apps/desktop/electron/desktop-distribution.mjs`,
+  `apps/app/src/app/lib/den.ts` (branding strings), root `package.json` (pruned scripts),
+  `pnpm-lock.yaml` (never merge — regenerate with `pnpm install`).
+- Upstream will reintroduce EE coupling (new `dev:den*` scripts, workflows, eval specs, den
+  files): extend `scripts/strip-ee.mjs` patterns and let it remove them; never hand-delete.
+- Exit (all pasted into the PR): guard spec green; `pnpm typecheck` green; `pnpm build` green;
+  evals self-tests + `lint:layers` green; `pnpm world up ./worlds/dev-headless.ts` reaches
+  HTTP 200 on web+health then tears down; strip scan clean; `UPSTREAM_BASE` updated in
+  `PROVENANCE.md`; record (not fix) the evals-tsc error count.
+
+**WP-2 — CI curation + guard hardening.**
+- Owns: `.github/**`; new guard specs `evals/specs/myai-*.test.ts`.
+- Steps: remove upstream-only workflows (release cutting, blacksmith runners, alpha/desktop
+  publish, Vercel/Den remnants); add one `myai-ci.yml` (push/PR to `main`: install → typecheck →
+  evals `lint:layers` + self-tests → pr-project specs incl. the boundary guard); then re-enable
+  Actions (`gh api repos/saifulbabo67646/myai/actions/permissions -X PUT -F enabled=true`) and
+  enable branch protection requiring PR + green CI.
+- Exit: a test PR runs myai CI green end-to-end; Actions enabled; no references to upstream
+  infra (blacksmith, openworklabs secrets, Den) remain in `.github/`.
+
+**WP-3 — Endpoint neutralization (Phase 2; design §5).**
+- Owns: `apps/app/src/app/lib/den.ts`, `lib/feedback.ts`, `lib/den-sign-in-intent.ts`,
+  `src/app/constants.ts` (Connect MCP catalog entry), `domains/workspace/openwork-den-help-link.tsx`,
+  `domains/workspace/remote-workspace-diagnostics.ts`, `domains/session/sidebar/account-status-menu.tsx`,
+  `domains/session/panel/side-panel.tsx`, `domains/session/surface/session-surface.tsx`,
+  `domains/session/modals` sign-in surfaces, `domains/connections` cloud surfaces,
+  `design-system/provider-logo-src.ts`; `apps/server/src/{connect-mcp-server-catalog,cloud-mcp-health,agent-context-cloud-probe,opencode-models-url}.ts`,
+  `apps/server/src/opencode-plugins/openwork-capabilities-knowledge.ts`;
+  `apps/desktop/electron/{main.mjs,workspace-store.mjs}`, `apps/desktop/package.json` (support
+  email); `worlds/` + `packages/world` den-target defaults; telemetry keys (PostHog, Sentry,
+  `diagnostic.openworklabs.com`).
+- Rule per surface: **disable / redirect (build-configurable, no default host) / keep-local**.
+  Ship state: public flavor `requireSignin:false`; cloud surfaces hidden; no code path can issue
+  a request to `*.openworklabs.com` in a release build.
+- Exit: new guard `evals/specs/myai-no-openwork-endpoints.test.ts` green (scans shipped sources
+  + release config for OpenWork hosts/telemetry IDs); `pnpm world up` prints a disabled or
+  myai-configured den target; `pnpm typecheck` + `apps/app/tests/den-*` suites green.
+- Conflict split with WP-5: WP-3 owns sign-in/cloud *behavior* surfaces (incl.
+  `welcome-page.tsx` CTA logic); WP-5 owns naming/logo/marketing surfaces.
+
+**WP-4 — myai-server MVP (Phase 1; design §4; CLEAN ROOM per §1.3).**
+- Gate: DEC-1 (license for myai-authored code) must be recorded; if non-MIT, `LICENSE` +
+  `REUSE.toml` carve-out lands before coding starts.
+- Owns: `apps/myai-server/**` (new pnpm workspace), `evals/specs/myai-server-*.test.ts`,
+  root manifest/workspace entries needed to register them.
+- Order of work: **4a** versioned API contract doc (routes, DTOs, token model, error taxonomy —
+  publish as `apps/myai-server/CONTRACT.md` EARLY; it unblocks WP-6) → **4b** scaffold (Hono +
+  better-auth + Drizzle/SQLite, health/readiness) → **4c** first-owner bootstrap, sessions,
+  roles (§4.2) → **4d** invitations → **4e** workspace registry + path-root validation →
+  **4f** scoped runtime token broker + proxy to loopback `openwork-server` (§4.1 boundary) →
+  **4g** audit events → **4h** execution-backend seam (§4.6, local backend only).
+- Test-first: the §4.8 acceptance path is written as a red spec before 4c–4f implementation.
+- Exit: acceptance path green in one command (`bootstrap → invite → sign-in → grant → session →
+  file action → revoke → rejected`); §4.5 security properties asserted in tests (library-based
+  hashing, tokens hashed at rest, traversal/symlink rejection, fail-closed config, log
+  scrubbing); PR includes a clean-room attestation (no `ee/` source consulted); boundary guard
+  green.
+- Prohibitions: consulting `ee/` sources anywhere (including the tracking fork); copying Den
+  schemas, route names, or error strings — public API and config names are myai-owned (§4.4).
+
+**WP-5 — Branding completion (Phase 3; design §6).**
+- Owns: `README.md`, `translated_readmes/`, `SUPPORT.md`, `app-demo.gif`,
+  `openwork-logo-transparent.svg`, `docs/` prose, window titles/installer display metadata,
+  welcome/about *naming* surfaces, `constants.json`-adjacent display strings, `changelog/`
+  presentation.
+- Keep: MIT attribution screens (required), internal `@openwork/*` package names (deliberate,
+  §1.4), nominative "derived from OpenWork" statements.
+- Exit: new guard `evals/specs/myai-branding-boundary.test.ts` green (no user-visible OpenWork
+  naming outside the attribution allow-list in shipped surfaces); attribution intact.
+
+**WP-6 — Desktop ↔ myai-server integration.**
+- Depends: WP-3 (redirect machinery) + WP-4a contract + WP-4c/4d/4e merged.
+- Owns: `apps/app` sign-in/connect flows against the myai API (team flavor),
+  `apps/desktop` bootstrap config wiring, `desktop-distribution.mjs` flavor defaults.
+- Exit: `.e2e.test.ts` proving the §4.8 path through the real desktop UI against a locally
+  spawned myai-server; public flavor still boots fully local with sign-in disabled.
+
+**WP-7 — Deployment packaging + docs (design §4.7).**
+- Depends: WP-4 acceptance path green.
+- Owns: `packaging/docker/Dockerfile.myai-server`, compose file (myai server + loopback
+  `openwork-server` + volume + optional TLS proxy), env template, `docs/deployment.md`
+  (install, upgrade, backup, restore, owner recovery, log collection, safe uninstall).
+- Exit: scripted clean-install + upgrade on a disposable volume green; fail-closed behavior
+  tested (missing secrets/paths refuse to boot); backup/restore round-trip tested.
+
+**WP-8 — Housekeeping & human decisions (owner: human; agents may execute decided items).**
+- **DEC-1 (blocks WP-4):** license for myai-authored code — MIT (simplest, keeps repo uniform)
+  vs proprietary carve-out (requires `LICENSE` + `REUSE.toml` amendment BEFORE writing code).
+- **DEC-2:** port or drop the uncommitted `provider-auth/store.ts` WIP sitting in the tracking
+  fork's `branding` working tree.
+- Port `spec-impact.test.ts` with MIT fixture paths (deleted at strip; tool itself remains).
+- Clean dormant Den/Daytona eval infra (`evals/packages/{env,hosts,testkit}` den modules,
+  `.devcontainer/start-daytona-server.sh`, allow-list in `strip-ee.mjs`) once WP-4 provides the
+  replacement lane.
+- Archive `saifulbabo67646/myai-old` after the first WP-1 cycle proves the sync ritual.
+
+### 9.4 Recommended dispatch
+
+1. **Now:** WP-1 (solo agent). Everything else waits — it rewrites the whole tree.
+2. **After WP-1 merges:** fan out four agents → WP-2, WP-3, WP-4 (once DEC-1 is recorded),
+   WP-5. Lanes are ownership-disjoint by design.
+3. **Then:** WP-6 after WP-3 + WP-4a; WP-7 after WP-4 green.
+4. Human closes DEC-1/DEC-2 and the archive step of WP-8 whenever convenient.
