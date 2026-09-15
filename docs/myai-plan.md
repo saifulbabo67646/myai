@@ -334,8 +334,19 @@ regression checks are all expressed there. Docs-only changes may skip runtime pr
    [Phase 0 — done 2026-09-16 at `/Users/saiful/Desktop/work/myai`; GitHub remote TBD]
 2. ✅ Prune workspace/root scripts/turbo/CI/packaging per Section 3; remove the EE eval specs
    (31 swept + `spec-impact.test.ts`); EE reference scan clean.
-3. Add Phase 0 guard tests (EE paths incl. git history, `@openwork-ee` deps, LICENSE/NOTICE
-   presence). URL/branding guards activate with Phase 2/3 work.
+3. ✅ Phase 0 guard added: `evals/specs/myai-ee-free-boundary.test.ts` (no `ee/` tree, no EE-scope
+   deps in any manifest, no `ee/` path in any git object/history, pruned workspace globs,
+   LICENSE/NOTICE present) — green. URL/branding guards activate with Phase 2/3 work.
+   Phase 0 verification record (2026-09-16, this machine): root + evals `pnpm install` clean;
+   `pnpm typecheck` (@openwork/app) green; `pnpm build` (desktop) green; evals `lint:layers`
+   clean (443 modules) and 218/218 infra self-tests pass; headless world (`pnpm world up
+   ./worlds/dev-headless.ts` with `OPENWORK_OPENCODE_BIN` → staged sidecar) reached web+server
+   HTTP 200; sample pr specs green (`myai-ee-free-boundary`, `three-desktop-builds`,
+   `alpha-update-eligibility`). Known pre-existing debt: evals `tsc -p .` reports 44 errors in
+   untouched upstream specs (cross-boundary .mjs/.js imports) present at the base snapshot — not
+   a Phase 0 regression. Env note: this machine needed `bun` (1.3.10, CI-pinned) installed; the
+   dev world also prints `denTarget: https://app.openworklabs.com` — a Phase 2 neutralization
+   target.
 4. Decide license for myai-authored code (MIT vs proprietary carve-out) and update root
    `LICENSE` + `REUSE.toml` accordingly. Baseline: repo stays MIT (§1.4 notices in place).
 5. Catch-up sync `UPSTREAM_BASE 03664d1f0 → upstream/dev fa9705458` (~670 commits) via the
