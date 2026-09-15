@@ -353,8 +353,10 @@ regression checks are all expressed there. Docs-only changes may skip runtime pr
    Section 2 patch ritual — first real exercise of the sync machinery.
 6. Follow-ups from the strip: port `spec-impact.test.ts` with MIT fixture paths; clean up dormant
    Den/Daytona eval infra (`evals/packages/{env,hosts,testkit}` den modules,
-   `.devcontainer/start-daytona-server.sh`) once the myai server replaces the Den lane; decide the
-   GitHub remote for this repo and archive the old fork's origin.
+   `.devcontainer/start-daytona-server.sh`) once the myai server replaces the Den lane.
+   ✅ GitHub remote decided 2026-09-16: public `saifulbabo67646/myai` (old origin renamed to
+   `myai-old`, archival pending). Actions + Dependabot disabled until CI workflows are curated
+   for myai (upstream's release/runner infrastructure does not apply).
 7. Scaffold `apps/myai-server`: better-auth + SQLite (Drizzle) + seam interface + health routes;
    write the first acceptance test (4.8 path) red, then implement to green. [Phase 1]
 8. Phase 2 endpoint inventory → per-surface disable/redirect/keep-local decisions; make server

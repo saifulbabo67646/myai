@@ -14,7 +14,8 @@ every upstream sync (see docs/myai-plan.md §2).
 | Upstream tip at import | `fa97054588a0ab12519fafc50cbea6d510f42130` (catch-up pending, ~670 commits) |
 | EE strip tool | `scripts/strip-ee.mjs` (run at import; must be re-run after every sync) |
 | Tracking fork | `/Users/saiful/Desktop/work/openwork` (private; `dev` mirrors `upstream/dev`) |
-| Tracking fork remotes | upstream `https://github.com/different-ai/openwork.git` · origin `https://github.com/saifulbabo67646/myai.git` (to be archived) |
+| Tracking fork remotes | upstream `https://github.com/different-ai/openwork.git` · origin `https://github.com/saifulbabo67646/myai-old.git` (renamed 2026-09-16; to be archived) |
+| This repo's origin | `https://github.com/saifulbabo67646/myai.git` (public, branch `main`, pushed 2026-09-16; GitHub Actions + Dependabot disabled until CI is curated) |
 
 ## Rules
 
