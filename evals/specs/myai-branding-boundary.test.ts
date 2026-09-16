@@ -31,7 +31,7 @@ const FRONT_DOOR = ["README.md", "SUPPORT.md", "translated_readmes"];
 // Frozen branding debt: counts may shrink, never grow (plan §6 — the Phase 0
 // guard stops branding regressions on every upstream sync). Each area is
 // recorded with the work that removes it; the number is the brand-as-word
-// count on the WP-5 base commit.
+// count on this branch's base commit, so a rebase re-measures it.
 const BRAND_DEBT: Array<{ area: string; baseline: number; removal: string }> = [
   {
     area: "apps/app/src/i18n/locales",
@@ -40,17 +40,17 @@ const BRAND_DEBT: Array<{ area: string; baseline: number; removal: string }> = [
   },
   {
     area: "apps/app/src/react-app",
-    baseline: 172,
+    baseline: 174,
     removal: "cloud, connections, and settings surfaces owned by WP-3/WP-6",
   },
   { area: "apps/app/src/components", baseline: 10, removal: "chat/tool surfaces owned by WP-3" },
-  { area: "apps/app/src/app", baseline: 18, removal: "den/workspace-endpoint surfaces owned by WP-3" },
+  { area: "apps/app/src/app", baseline: 21, removal: "den/workspace-endpoint surfaces owned by WP-3" },
   { area: "apps/server/src", baseline: 345, removal: "cloud probe and capability plugins owned by WP-3" },
-  { area: "apps/desktop/electron", baseline: 25, removal: "shell surfaces owned by WP-3/WP-6" },
+  { area: "apps/desktop/electron", baseline: 26, removal: "shell surfaces owned by WP-3/WP-6" },
   { area: "packages", baseline: 228, removal: "unassigned; naming pass across shared packages" },
   {
     area: "docs",
-    baseline: 394,
+    baseline: 395,
     removal: "upstream engineering/EE design notes; a trim decision under DEC-3, not a rename",
   },
   { area: "changelog", baseline: 95, removal: "upstream release history; keep or archive as history" },

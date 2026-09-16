@@ -497,12 +497,14 @@ not a regression; no WP fixes them opportunistically.
 - **Guard:** `myai-branding-boundary.test.ts` holds the front door and identity surfaces at zero,
   keeps the removed assets gone, and freezes 11 branding areas on shrink-only baselines. Its brand
   matcher deliberately has no leading word boundary, which catches a message the older
-  `apps/desktop/electron/branding.test.mjs` (`\b`-anchored) misses; that test drops 96 → 18, and
-  all 18 remaining are in WP-3's files (service names such as `OpenWork Web` on surfaces WP-3 is
-  disabling). Not wired into CI: `myai-ci.yml` is WP-2's path — one step alongside the
-  `myai-ci-hygiene` guard.
+  `apps/desktop/electron/branding.test.mjs` (`\b`-anchored) misses; that test drops 96 → 20, and
+  all 20 remaining are in WP-3 files (service names such as `OpenWork Web`, and the two WP-3's own
+  merge added). Not wired into CI: `myai-ci.yml` is WP-2's path — one step alongside the
+  `myai-ci-hygiene` guard. Rebasing onto the merged WP-3/WP-4 work re-measured the baselines (+7
+  brand-as-word mentions across four areas, all of them comments explaining what upstream myai
+  does not ship), which is the ratchet working: growth has to be looked at.
 - **Still branded by design or by owner:** `apps/app/src/i18n/locales/*` (248 mentions of upstream
-  *service* names — renaming them would claim a cloud myai does not ship), `docs/` (394) and
+  *service* names — renaming them would claim a cloud myai does not ship), `docs/` (395) and
   `packages/docs/` (1023, upstream engineering and EE/cloud documentation; a trim is DEC-3's call),
   `changelog/` (95, upstream release history), and root governance markdown (15).
 
