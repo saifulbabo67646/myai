@@ -35,9 +35,6 @@ export function MyaiTeamSignInPage() {
       const client = createMyaiServerClient({ baseUrl: readDenBootstrapConfig().baseUrl });
       await client.signIn(email, password);
       await denAuth.refresh();
-      if (!denAuth.isSignedIn && denAuth.status !== "checking") {
-        setError(denAuth.error ?? "The team server did not establish a session.");
-      }
     } catch (nextError) {
       setError(messageFor(nextError));
     } finally {

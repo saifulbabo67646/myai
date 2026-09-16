@@ -27,7 +27,7 @@ import {
 import { exchangeHandoffAndSignIn } from "../../../app/lib/den-handoff";
 import { readOrgSelectionPending } from "../../../app/lib/den-sign-in-intent";
 import { desktopBridge, readDesktopDistributionInfo } from "../../../app/lib/desktop";
-import { createMyaiServerClient, MyaiServerApiError } from "../../../app/lib/myai-server-client";
+import { createMyaiServerClient } from "../../../app/lib/myai-server-client";
 import {
   denSessionUpdatedEvent,
   denSettingsChangedEvent,
@@ -271,9 +271,7 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
             ? nextError.message
             : "Failed to restore myai Team session.",
         );
-        updateStatus(nextError instanceof MyaiServerApiError && nextError.status === 401
-          ? "signed_out"
-          : "unavailable");
+        updateStatus("signed_out");
         clearDesktopSentrySession();
       }
       return;
