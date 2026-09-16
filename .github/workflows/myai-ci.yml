@@ -72,12 +72,15 @@ jobs:
         continue-on-error: true
         run: pnpm --dir evals run lint:layers
 
-      - name: Evals spec ratchets (advisory — non-blocking)
+      - name: Evals channel ratchet (advisory — non-blocking)
         continue-on-error: true
         working-directory: evals
-        run: |
-          node scripts/spec-channel-ratchet.mjs
-          node scripts/spec-boundary-ratchet.mjs
+        run: node scripts/spec-channel-ratchet.mjs
+
+      - name: Evals boundary ratchet (advisory — non-blocking)
+        continue-on-error: true
+        working-directory: evals
+        run: node scripts/spec-boundary-ratchet.mjs
 
       - name: Evals harness self-tests (advisory — non-blocking)
         continue-on-error: true
