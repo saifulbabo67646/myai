@@ -1,0 +1,88 @@
+name: myai CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: myai-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  myai-ci:
+    name: myai-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            evals/pnpm-lock.yaml
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      # Blocking lanes: branch protection requires this job, so everything from
+      # here to the advisory block must be green on every PR.
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Install evals workspace
+        run: pnpm --dir evals install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: EE-free boundary guard (repo-wide invariant, docs/myai-plan.md §9.1)
+        run: pnpm --dir evals exec vitest run --project pr specs/myai-ee-free-boundary.test.ts
+
+      - name: CI hygiene guard (.github boundary)
+        run: pnpm --dir evals exec vitest run --project pr specs/myai-ci-hygiene.test.ts
+
+      # Advisory lanes: inherited upstream debt, measured on the WP-1 merge
+      # commit and recorded in docs/myai-plan.md (§9.2 WP-2 row, DEC-3). They run
+      # on every PR so the debt stays visible; each turns blocking once its
+      # baseline is clean. The workflow run still passes while they are red.
+      - name: Evals browser-code check (advisory — non-blocking)
+        continue-on-error: true
+        run: pnpm --dir evals run check:browser
+
+      - name: Evals layer lint (advisory — non-blocking)
+        continue-on-error: true
+        run: pnpm --dir evals run lint:layers
+
+      - name: Evals channel ratchet (advisory — non-blocking)
+        continue-on-error: true
+        working-directory: evals
+        run: node scripts/spec-channel-ratchet.mjs
+
+      - name: Evals boundary ratchet (advisory — non-blocking)
+        continue-on-error: true
+        working-directory: evals
+        run: node scripts/spec-boundary-ratchet.mjs
+
+      - name: Evals harness self-tests (advisory — non-blocking)
+        continue-on-error: true
+        working-directory: evals
+        run: node --test runner/*.test.ts packages/*/test/*.test.ts bin/*.test.mjs scripts/*.test.mjs
