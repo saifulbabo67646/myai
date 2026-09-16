@@ -374,7 +374,7 @@ WP-8 housekeeping/decisions: anytime, owner = human
 | WP-1 | Catch-up sync to upstream | WP-0 | solo (critical path) | ✅ done 2026-09-16 (PR #3, upstream `391d794d2`) |
 | WP-2 | CI curation + guard hardening | WP-1 | A | 🔄 in review (PR: `wp/2-ci-curation`, PR #4) |
 | WP-3 | Endpoint neutralization (Phase 2) | WP-1 | B | 🔄 in review (PR: `wp/3-endpoint-neutralization`) |
-| WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | blocked on DEC-1 |
+| WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | waiting on WP-1 merge |
 | WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | ready (WP-1 merged) |
 | WP-6 | Desktop ↔ server integration | WP-3 + WP-4a | D | waiting |
 | WP-7 | Deployment packaging + docs | WP-4 green | C | waiting |
@@ -506,8 +506,8 @@ not a regression; no WP fixes them opportunistically.
   tested (missing secrets/paths refuse to boot); backup/restore round-trip tested.
 
 **WP-8 — Housekeeping & human decisions (owner: human; agents may execute decided items).**
-- **DEC-1 (blocks WP-4):** license for myai-authored code — MIT (simplest, keeps repo uniform)
-  vs proprietary carve-out (requires `LICENSE` + `REUSE.toml` amendment BEFORE writing code).
+- **DEC-1: ✅ resolved 2026-09-16 — MIT.** The license for myai-authored code is MIT,
+  keeping the repository uniform; no proprietary `LICENSE` + `REUSE.toml` carve-out is needed.
 - **DEC-2: ✅ resolved 2026-09-16 — ported.** The tracking fork's uncommitted
   `provider-auth/store.ts` fix (disabled providers stay offerable so they can be reconnected;
   any connect clears the disabled flag) was verified green (7/7 `bun test`), confirmed absent
