@@ -1,4 +1,6 @@
 import Database from "better-sqlite3";
+import { dirname } from "node:path";
+import { mkdirSync } from "node:fs";
 import type { MyaiConfig } from "./config.js";
 
 export type SqliteDatabase = Database.Database;
@@ -111,6 +113,7 @@ CREATE INDEX IF NOT EXISTS myai_audit_event_created_idx ON myai_audit_event(crea
 `;
 
 export function openDatabase(config: MyaiConfig): SqliteDatabase {
+  mkdirSync(dirname(config.databasePath), { recursive: true });
   const database = new Database(config.databasePath);
   database.pragma("foreign_keys = ON");
   database.exec(schema);

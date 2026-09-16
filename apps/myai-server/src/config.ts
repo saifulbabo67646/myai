@@ -54,16 +54,24 @@ export function resolveMyaiConfig(input: MyaiConfigInput): MyaiConfig {
   if (!runtimeBaseUrl || !/^https?:\/\//.test(runtimeBaseUrl)) {
     throw new Error("Invalid myai server configuration: runtime URL is required");
   }
+  let runtime: URL;
+  try {
+    runtime = new URL(runtimeBaseUrl);
+  } catch {
+    throw new Error("Invalid myai server configuration: runtime URL is invalid");
+  }
+  if (runtime.hostname !== "127.0.0.1" && runtime.hostname !== "localhost" && runtime.hostname !== "::1") {
+    throw new Error("Invalid myai server configuration: runtime must be internal");
+  }
+  if (runtime.username || runtime.password) {
+    throw new Error("Invalid myai server configuration: runtime credentials are not allowed");
+  }
   if (mode === "production") {
     if (input.sessionSecret.trim().length < 32) {
       throw new Error("Invalid myai server configuration: session secret is too short");
     }
     if (!validDirectory(dataDir) || workspaceRoots.length === 0 || workspaceRoots.some((root) => !validDirectory(root))) {
       throw new Error("Invalid myai server configuration: data directory and workspace roots must exist");
-    }
-    const runtime = new URL(runtimeBaseUrl);
-    if (runtime.hostname !== "127.0.0.1" && runtime.hostname !== "localhost" && runtime.hostname !== "::1") {
-      throw new Error("Invalid myai server configuration: runtime must be internal");
     }
     const publicUrl = new URL(publicBaseUrl);
     const boundHost = input.host ?? "127.0.0.1";

@@ -12,7 +12,7 @@ interface JsonObject {
 
 function object(value: unknown): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected JSON object");
-  return value as JsonObject;
+  return Object.fromEntries(Object.entries(value));
 }
 
 function stringValue(value: unknown, label: string): string {
@@ -71,7 +71,8 @@ test("fresh installation completes bootstrap, invitation, scoped file access, an
       return;
     }
     if (incoming.url?.startsWith("/files/content") && incoming.method === "PUT") {
-      const payload = object(JSON.parse(await body(incoming)) as unknown);
+      const parsed: unknown = JSON.parse(await body(incoming));
+      const payload = object(parsed);
       json(outgoing, 200, { path: new URL(incoming.url, "http://runtime.test").searchParams.get("path"), content: payload.content });
       return;
     }

@@ -1,8 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { SqliteDatabase } from "./database.js";
 
-export const roles = ["owner", "admin", "member", "viewer"] as const;
-export type Role = (typeof roles)[number];
+export type Role = "owner" | "admin" | "member" | "viewer";
 export type GrantRole = "member" | "viewer";
 
 export interface UserSummary {
@@ -68,7 +67,7 @@ export function createOpaqueToken(prefix: string): string {
 }
 
 function record(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : null;
 }
 
 function stringField(value: unknown, field: string): string {

@@ -46,7 +46,7 @@ const workspaceSchema = z.object({ name: z.string().trim().min(1).max(120), path
 const accessSchema = z.object({ userId: z.string().trim().min(1).max(200), role: z.enum(["member", "viewer"]) }).strict();
 
 function record(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : null;
 }
 
 function text(value: unknown, field: string): string {

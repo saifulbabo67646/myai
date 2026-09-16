@@ -11,7 +11,7 @@ interface JsonObject {
 
 function object(value: unknown): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected JSON object");
-  return value as JsonObject;
+  return Object.fromEntries(Object.entries(value));
 }
 
 function cookie(response: Response): string {

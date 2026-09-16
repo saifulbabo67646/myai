@@ -15,7 +15,7 @@ interface JsonObject {
 
 function object(value: unknown): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected JSON object");
-  return value as JsonObject;
+  return Object.fromEntries(Object.entries(value));
 }
 
 function cookie(response: Response): string {
@@ -105,6 +105,7 @@ test("production configuration fails closed when its secret, data directory, or 
     expect(() => resolveMyaiConfig({ environment: "production", dataDir: root, databasePath: join(root, "control.sqlite"), workspaceRoots: [join(root, "missing-root")], runtimeBaseUrl: "http://127.0.0.1:1", sessionSecret: "production-session-secret-that-is-long-enough" })).toThrow(/configuration/i);
     expect(() => resolveMyaiConfig({ environment: "production", dataDir: ".", databasePath: "./control.sqlite", workspaceRoots: [root], runtimeBaseUrl: "http://127.0.0.1:1", sessionSecret: "production-session-secret-that-is-long-enough" })).toThrow(/configuration/i);
     expect(() => resolveMyaiConfig({ environment: "production", dataDir: root, databasePath: join(root, "control.sqlite"), workspaceRoots: [root], runtimeBaseUrl: "http://127.0.0.1:1", sessionSecret: "production-session-secret-that-is-long-enough", host: "0.0.0.0", publicBaseUrl: "http://0.0.0.0" })).toThrow(/HTTPS/i);
+    expect(() => resolveMyaiConfig({ environment: "test", dataDir: root, databasePath: join(root, "control.sqlite"), workspaceRoots: [root], runtimeBaseUrl: "http://runtime.example.test", sessionSecret: "test-session-secret-that-is-long-enough" })).toThrow(/internal/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
