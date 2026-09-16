@@ -472,13 +472,12 @@ if (existsSync(join(ROOT, "ee"))) {
 }
 
 // Dormant, string-level EE references that compile and never ship. They belong
-// to the Daytona eval lane and mock drivers; listed so the guard test can
+// to the Daytona eval lane and the eval harness; listed so the guard test can
 // allow-list exactly these and nothing else.
 const DORMANT_ALLOWLIST = [
   "evals/specs/myai-ee-free-boundary.test.ts",
   // Asserts the spec classifier detects EE paths; the path is a test fixture.
   "evals/scripts/spec-boundary-ratchet.test.mjs",
-  "evals/drivers/posthog-capture-mock.mjs",
   "evals/packages/behaviors/src/cloud-plugins.ts",
   "evals/packages/env/src/den.ts",
   "evals/packages/env/src/kind-stack.ts",
