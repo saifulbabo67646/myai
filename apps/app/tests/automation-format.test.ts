@@ -30,7 +30,7 @@ describe("Automation labels", () => {
     expect(automationRunNotice(run)).toEqual({
       variant: "default",
       title: "Run missed",
-      message: `This occurrence never started. ${message} Keep OpenWork open, signed in, and your computer awake and connected for future runs.`,
+      message: `This occurrence never started. ${message} Keep myai open, signed in, and your computer awake and connected for future runs.`,
     });
     expect(runStatusLabel(run)).toBe("Run missed");
   });

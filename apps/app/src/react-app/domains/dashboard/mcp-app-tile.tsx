@@ -268,7 +268,7 @@ function McpAppTileContent({
       }
       if (app.launchId) ownedLaunches.current.set(app.launchId, endpoint);
       assertActive();
-      if (!app.launchId) throw new Error("This App has no live launch context. Update OpenWork and run the tile again.");
+      if (!app.launchId) throw new Error("This App has no live launch context. Update myai and run the tile again.");
       const request = {
         launchId: app.launchId,
         sessionId: null,

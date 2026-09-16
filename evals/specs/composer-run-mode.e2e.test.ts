@@ -12,7 +12,7 @@ test("workspace run mode is opt-in, confirms Keep going, and preserves policy wh
   const mount = `/workspace/${encodeURIComponent(world.workspace.workspaceId)}`;
   const trigger = { testId: "workspace-run-mode-trigger" };
   const flag = { testId: "workspace-run-mode-flag", label: "Show workspace run mode" };
-  const confirmation = { text: "Let OpenWork keep going?" };
+  const confirmation = { text: "Let myai keep going?" };
   const footer = { text: "Applies to every chat in this workspace. Specific workspace rules still apply." };
 
   const read = async (path: string) => {

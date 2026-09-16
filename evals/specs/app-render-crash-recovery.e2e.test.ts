@@ -10,7 +10,7 @@ const test = spec.world(renderCrashWorld);
 const SECRET = "eval-secret-grant-4242";
 const THROWN = `Local context is missing (eval render throw) after https://app.openworklabs.com/signin?code=${SECRET}`;
 const MESSAGE = "Local context is missing (eval render throw) after https://app.openworklabs.com/signin";
-const heading = { text: /OpenWork hit an unexpected error/ };
+const heading = { text: /myai hit an unexpected error/ };
 
 test("a render throw shows a recovery screen with the error instead of a blank window", async ({ world, user, agent, probe, step }) => {
   await step("the app is healthy and shows no recovery screen", async () => {
@@ -67,7 +67,7 @@ test("a render throw shows a recovery screen with the error instead of a blank w
     await probe.eventually(() => probe.text(), {
       within: 120_000,
       label: "app content after reload",
-      until: (text) => text.trim().length > 40 && !/OpenWork hit an unexpected error/.test(text),
+      until: (text) => text.trim().length > 40 && !/myai hit an unexpected error/.test(text),
     });
     await user.see("composer", { editable: true, timeoutMs: 120_000 });
     expect(await probe.hash()).toBe(route);

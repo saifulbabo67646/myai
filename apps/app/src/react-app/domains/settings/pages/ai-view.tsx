@@ -51,7 +51,7 @@ export type AiSettingsViewProps = {
   organizationName?: string;
   /** Set of local provider IDs that were imported from cloud. */
   cloudProviderIds?: Set<string>;
-  /** Cloud provider IDs routed through the OpenWork inference gateway. */
+  /** Cloud provider IDs routed through the myai inference gateway. */
   gatewayProviderIds?: ReadonlySet<string>;
   /** Gateway providers waiting on this member's own sign-in before they can be used. */
   gatewayConnectProviders?: GatewayConnectProvider[];

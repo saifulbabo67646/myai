@@ -835,7 +835,7 @@ export function McpView(props: McpViewProps) {
 
   // Servers written into this workspace's config appear under MCPs as local
   // items. Projected Cloud connections have their own account controls, and
-  // OpenWork's own runtimes are app functionality rather than MCPs to browse.
+  // myai's own runtimes are app functionality rather than MCPs to browse.
   const localServers = props.mcpServers.filter((entry) => {
     if (isConnectDirectMcpServerName(entry.name)) return false;
     const match = resolveQuickConnectMatch(entry.name);
@@ -868,7 +868,7 @@ export function McpView(props: McpViewProps) {
     return isQuickConnectConfigured(entry);
   };
 
-  // Built-in OpenWork extensions answer to `allowBuiltInExtensions`; every
+  // Built-in myai extensions answer to `allowBuiltInExtensions`; every
   // other directory entry is a local install governed by
   // `allowManageExtensions`. Entries the member already installed stay usable
   // but can no longer be managed.

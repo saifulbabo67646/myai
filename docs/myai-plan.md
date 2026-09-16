@@ -372,10 +372,10 @@ WP-8 housekeeping/decisions: anytime, owner = human
 |----|------|-----------|------|--------|
 | WP-0 | Phase 0 bootstrap | — | — | ✅ done 2026-09-16 |
 | WP-1 | Catch-up sync to upstream | WP-0 | solo (critical path) | ✅ done 2026-09-16 (PR #3, upstream `391d794d2`) |
-| WP-2 | CI curation + guard hardening | WP-1 | A | 🔄 in review (PR: `wp/2-ci-curation`, PR #4) |
-| WP-3 | Endpoint neutralization (Phase 2) | WP-1 | B | 🔄 in review (PR: `wp/3-endpoint-neutralization`) |
-| WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | 🔄 in review (PR #8) |
-| WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | ready (WP-1 merged) |
+| WP-2 | CI curation + guard hardening | WP-1 | A | ✅ done 2026-09-16 (PR #4) |
+| WP-3 | Endpoint neutralization (Phase 2) | WP-1 | B | ✅ done 2026-09-16 (PR #6) |
+| WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | ✅ done 2026-09-16 (PR #8) |
+| WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | 🔄 in review (PR: `wp/5-branding`, PR #7) |
 | WP-6 | Desktop ↔ server integration | WP-3 + WP-4a | D | waiting |
 | WP-7 | Deployment packaging + docs | WP-4 green | C | waiting |
 | WP-8 | Housekeeping & human decisions | — | anytime | open |
@@ -489,6 +489,24 @@ not a regression; no WP fixes them opportunistically.
   §1.4), nominative "derived from OpenWork" statements.
 - Exit: new guard `evals/specs/myai-branding-boundary.test.ts` green (no user-visible OpenWork
   naming outside the attribution allow-list in shipped surfaces); attribution intact.
+- **Landed 2026-09-16 (PR #7).** Front door rewritten for myai (README text-first, translated
+  readmes, SUPPORT); `app-demo.gif` and `openwork-logo-transparent.svg` deleted; 78 bare upstream
+  mentions across 44 shipped files renamed, including the macOS microphone permission string; 39
+  assertions in 24 suites realigned; LICENSE/NOTICE attribution kept, with an explicit
+  no-endorsement line in the README.
+- **Guard:** `myai-branding-boundary.test.ts` holds the front door and identity surfaces at zero,
+  keeps the removed assets gone, and freezes 11 branding areas on shrink-only baselines. Its brand
+  matcher deliberately has no leading word boundary, which catches a message the older
+  `apps/desktop/electron/branding.test.mjs` (`\b`-anchored) misses; that test drops 96 → 20, and
+  all 20 remaining are in WP-3 files (service names such as `OpenWork Web`, and the two WP-3's own
+  merge added). Not wired into CI: `myai-ci.yml` is WP-2's path — one step alongside the
+  `myai-ci-hygiene` guard. Rebasing onto the merged WP-3/WP-4 work re-measured the baselines (+7
+  brand-as-word mentions across four areas, all of them comments explaining what upstream myai
+  does not ship), which is the ratchet working: growth has to be looked at.
+- **Still branded by design or by owner:** `apps/app/src/i18n/locales/*` (248 mentions of upstream
+  *service* names — renaming them would claim a cloud myai does not ship), `docs/` (395) and
+  `packages/docs/` (1023, upstream engineering and EE/cloud documentation; a trim is DEC-3's call),
+  `changelog/` (95, upstream release history), and root governance markdown (15).
 
 **WP-6 — Desktop ↔ myai-server integration.**
 - Depends: WP-3 (redirect machinery) + WP-4a contract + WP-4c/4d/4e merged.

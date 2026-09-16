@@ -19,7 +19,7 @@ export function DashboardConnectionCard({ toolName, toolCallId, output, connecti
       const settings = readDenSettings();
       const token = settings.authToken?.trim() ?? "";
       const organizationId = settings.activeOrgId?.trim() ?? "";
-      if (!token || !organizationId) throw new Error("Sign in to OpenWork to connect your account.");
+      if (!token || !organizationId) throw new Error("Sign in to myai to connect your account.");
       const scope = { baseUrl: settings.baseUrl, token, organizationId };
       const isCurrent = () => {
         const current = readDenSettings();
@@ -27,7 +27,7 @@ export function DashboardConnectionCard({ toolName, toolCallId, output, connecti
           baseUrl: current.baseUrl, token: current.authToken?.trim() ?? "", organizationId: current.activeOrgId?.trim() ?? "",
         }) && current.apiBaseUrl === settings.apiBaseUrl;
       };
-      const assertCurrent = () => { if (!isCurrent()) throw new Error("Your OpenWork account changed. Try connecting again."); };
+      const assertCurrent = () => { if (!isCurrent()) throw new Error("Your myai account changed. Try connecting again."); };
       const client = createDenClient({ baseUrl: settings.baseUrl, apiBaseUrl: settings.apiBaseUrl, token });
       const connections = await client.listMcpConnections(organizationId, "usable");
       assertCurrent();

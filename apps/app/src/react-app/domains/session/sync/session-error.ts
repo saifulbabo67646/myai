@@ -12,16 +12,16 @@ export type OpencodeSessionErrorPresentation = {
   technicalDetails: string;
   recoveryPrompt: string | null;
   /**
-   * `gateway-auth-required` only: the OpenWork Gateway's OAuth start URL for
+   * `gateway-auth-required` only: the myai Gateway's OAuth start URL for
    * this member (`error.auth_url` in the 401 body). Null when the body omitted
    * it — the renderer then deep-links to Settings > AI providers. Additive.
    */
   connectUrl?: string | null;
 };
 
-/** Error code the OpenWork inference gateway returns when the member's own sign-in is missing or revoked. */
+/** Error code the myai inference gateway returns when the member's own sign-in is missing or revoked. */
 export const GATEWAY_AUTH_REQUIRED_ERROR_CODE = "openwork_auth_required";
-export const GATEWAY_AUTH_REQUIRED_TITLE = "Sign in to this OpenWork Gateway provider to keep using it";
+export const GATEWAY_AUTH_REQUIRED_TITLE = "Sign in to this myai Gateway provider to keep using it";
 
 export const interruptedTaskRecoveryPrompt = [
   "Continue the interrupted task from the current state.",
@@ -100,7 +100,7 @@ function sessionErrorKind(
 
 function errorTitle(kind: OpencodeSessionErrorKind, fallback: string) {
   if (kind === "disk-full") return "Storage error reported";
-  if (kind === "database-error") return "OpenWork couldn’t access its saved data";
+  if (kind === "database-error") return "myai couldn’t access its saved data";
   if (kind === "aborted") return "Task interrupted";
   if (kind === "provider-timeout") return "Provider did not respond in time";
   if (kind === "provider-incomplete") return "The model response was interrupted";
@@ -116,7 +116,7 @@ function errorDescription(kind: OpencodeSessionErrorKind, gatewayAuth: GatewayAu
     return "A storage limit was reported by the task runtime or a connected service. This does not necessarily mean your computer is full. Check the affected service or workspace before freeing local disk space.";
   }
   if (kind === "database-error") {
-    return "Try again. If this keeps happening, check the available disk space on the device running this task and restart OpenWork. For a cloud workspace, contact its administrator.";
+    return "Try again. If this keeps happening, check the available disk space on the device running this task and restart myai. For a cloud workspace, contact its administrator.";
   }
   if (kind === "aborted") {
     return "OpenCode stopped before the task finished. Output and files already produced are kept.";

@@ -50,7 +50,7 @@ async function getComputerUseMcpCommand() {
     throw new Error("myai Computer Use is missing from this myai build.");
   }
 
-  throw new Error("The Computer Use helper is unavailable. Rebuild or reinstall OpenWork.");
+  throw new Error("The Computer Use helper is unavailable. Rebuild or reinstall myai.");
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ function spawnCheckPermissions(bin) {
           screenRecording: parsed?.screenRecording === true && parsed?.protocolVersion === "openwork.computer-use/1",
           supported: parsed?.supported === true,
           protocolVersion: parsed?.protocolVersion,
-          ...(parsed?.protocolVersion !== "openwork.computer-use/1" ? { error: "This helper uses the previous Computer Use implementation. Rebuild or reinstall OpenWork, then reconnect Computer Use." } : {}),
+          ...(parsed?.protocolVersion !== "openwork.computer-use/1" ? { error: "This helper uses the previous Computer Use implementation. Rebuild or reinstall myai, then reconnect Computer Use." } : {}),
         });
       } catch {
         resolve({ ok: false, accessibility: false, screenRecording: false, error: "Permission check returned invalid output." });
@@ -154,7 +154,7 @@ let setupProcess = null;
 async function openComputerUseSetupApp() {
   if (process.platform !== "darwin") throw new Error("Desktop Computer Use requires macOS 14 or later.");
   const bin = resolveComputerUseExecutable();
-  if (!bin) throw new Error("The Computer Use helper is unavailable. Rebuild or reinstall OpenWork.");
+  if (!bin) throw new Error("The Computer Use helper is unavailable. Rebuild or reinstall myai.");
   // Keep the responsible application consistent with --check and the MCP
   // child. LaunchServices gives the GUI its own TCC identity instead.
   if (setupProcess && setupProcess.exitCode === null && !setupProcess.killed) {

@@ -43,7 +43,7 @@ test("UI control failures are logged locally without exposing exception details"
     const payload = await response.json();
 
     assert.equal(response.status, 500);
-    assert.deepEqual(payload, { ok: false, error: "OpenWork UI control request failed." });
+    assert.deepEqual(payload, { ok: false, error: "myai UI control request failed." });
     assert.equal(logged[0]?.[0], "[ui-control] request failed");
     assert.equal(logged[0]?.[1], failure);
     assert.doesNotMatch(JSON.stringify(payload), /private renderer failure/);

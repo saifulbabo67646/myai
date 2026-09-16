@@ -197,7 +197,7 @@ export function createUiControlServer({
       } catch (error) {
         if (/^\/(?:browser|webmcp)(?:\/|$)/.test(request.url ?? "")) console.error("[ui-control] request failed");
         else console.error("[ui-control] request failed", error);
-        sendJsonResponse(response, 500, { ok: false, error: "OpenWork UI control request failed." });
+        sendJsonResponse(response, 500, { ok: false, error: "myai UI control request failed." });
       }
     });
     await new Promise((resolve, reject) => {

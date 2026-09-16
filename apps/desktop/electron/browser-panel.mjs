@@ -491,7 +491,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
         request.browsers = await listInstalledBrowsers();
         if (!isCurrent()) return;
         request.items = [
-          { type: "item", id: "open-builtin", label: "Open in OpenWork" },
+          { type: "item", id: "open-builtin", label: "Open in myai" },
           { type: "item", id: "open-external", label: "Open in Default Browser" },
           ...request.browsers.map(({ id, name }) => ({ type: "item", id: `browser:${id}`, label: `Open in ${name}` })),
           { type: "separator" },
@@ -736,9 +736,9 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
     // Check synchronously before creating a WebContentsView, including pending
     // opens, popups, transcript links and the tab-strip button.
     if (browserTabs.size >= MAX_BROWSER_TABS) {
-      throw new BrowserTaskError("tab_limit", `OpenWork has ${MAX_BROWSER_TABS} browser tabs open. Close an unused browser tab in any conversation, then try again.`);
+      throw new BrowserTaskError("tab_limit", `myai has ${MAX_BROWSER_TABS} browser tabs open. Close an unused browser tab in any conversation, then try again.`);
     }
-    if (!restoreTabId && registry.size() >= 100) throw new Error("OpenWork has 100 saved browser tabs. Close an unused tab, then try again.");
+    if (!restoreTabId && registry.size() >= 100) throw new Error("myai has 100 saved browser tabs. Close an unused tab, then try again.");
     installBrowserSessionHooks();
     ensureWebMcpFramePolicy();
     const tabId = restoreTabId ?? createBrowserTabId();
@@ -955,7 +955,7 @@ export function createBrowserPanel({ getWindow, remoteDebugPort, onDeepLink, che
   // page for the agent driving it: lay out at a real viewport, accept typing as
   // a focused page, and paint so CDP screenshots work. Park it in a never-shown
   // window: detached views stop painting, and every child of the main window's
-  // contentView paints above OpenWork, regardless of its child index or bounds.
+  // contentView paints above myai, regardless of its child index or bounds.
   // Moving the same view preserves the document and CDP target.
   function enterBackgroundMode(tab) {
     // A task's blank consent tab has no document to paint or observe. Attaching

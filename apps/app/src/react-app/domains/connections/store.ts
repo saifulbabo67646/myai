@@ -381,7 +381,7 @@ export function createConnectionsStore(options: {
         && ((command.length === 2 && command[1] === "mcp") || (command.length === 3 && command[1] === "relay"))) {
         const currentCommand = await resolveDesktopCommand("getComputerUseMcpCommand", false);
         const bundled = currentCommand && (command[0] === currentCommand[0]
-          || command[0].endsWith("/OpenWork Computer Use.app/Contents/MacOS/ComputerUse"));
+          || command[0].endsWith("/myai Computer Use.app/Contents/MacOS/ComputerUse"));
         if (bundled && JSON.stringify(command) !== JSON.stringify(currentCommand)) {
           const writable = await resolveWritableOpenworkTarget();
           if (writable.canUseOpenworkServer && writable.openworkClient && writable.openworkWorkspaceId === openworkWorkspaceId
@@ -461,7 +461,7 @@ export function createConnectionsStore(options: {
     const mcpResource = extensionResource(entry.extensionManifest, "mcp");
     if (mcpResource?.localCommandRef === "openwork.computerUseMcp") {
       const command = await resolveDesktopCommand("getComputerUseMcpCommand", false);
-      if (!command) throw new Error("Computer Use requires the bundled OpenWork helper on macOS.");
+      if (!command) throw new Error("Computer Use requires the bundled myai helper on macOS.");
       return command;
     }
     if (mcpResource?.localCommandRef === "openwork.uiMcp" || entry.serverName === "openwork-ui") {

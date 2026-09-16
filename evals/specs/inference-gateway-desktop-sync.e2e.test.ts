@@ -10,7 +10,7 @@ import { app, browserScript, eventually, needs, server, SkipError, test } from "
  * sync, one runtime opencode provider exists per `inference_providers` row —
  * id = the `ipr_` id, `api`/`options.baseURL` = the gateway URL, the scoped env
  * name from /connect set to the member's `ow_gw_` key — and the model
- * picker badges that provider group "via OpenWork Gateway".
+ * picker badges that provider group "via myai Gateway".
  *
  * The inference app is not booted here: materialization depends only on
  * den-api's connect payload. The gateway round-trip is proved by
@@ -18,11 +18,11 @@ import { app, browserScript, eventually, needs, server, SkipError, test } from "
  */
 
 const ORGANIZATION_NAME = "Inference Gateway Desktop Sync";
-const PROVIDER_NAME = "Anthropic via OpenWork Gateway";
+const PROVIDER_NAME = "Anthropic via myai Gateway";
 const CATALOG_PROVIDER_ID = "anthropic";
 const CATALOG_ENV_KEY = "ANTHROPIC_API_KEY";
 const GATEWAY_KEY_PREFIX = "ow_gw_";
-const GATEWAY_BADGE_LABEL = "via OpenWork Gateway";
+const GATEWAY_BADGE_LABEL = "via myai Gateway";
 const FAKE_UPSTREAM_KEY = "sk-ant-fake-upstream-key-never-reaches-a-device";
 // Nothing listens here on purpose: the desktop must materialize the URL as given, not probe it.
 const GATEWAY_ORIGIN = "http://127.0.0.1:18791";
@@ -284,7 +284,7 @@ test("a gateway provider materializes on the desktop as its own ipr_ provider wi
     local.envValue === memberKey && !local.envDump.includes(FAKE_UPSTREAM_KEY),
   );
 
-  // --- Picker: the model is selectable under a group badged "via OpenWork Gateway". ---
+  // --- Picker: the model is selectable under a group badged "via myai Gateway". ---
   await go(desktopApp, `/workspace/${desktopApp.workspaceId}/session`);
   const models = await readAvailableModels(desktopApp);
   const gatewayModel = models.find((model) => model.id === wireModelId && model.providerName === PROVIDER_NAME) ?? null;
@@ -340,7 +340,7 @@ test("a gateway provider materializes on the desktop as its own ipr_ provider wi
   // Negative half needs a witness: at least one non-gateway group exists and is not badged.
   expect(unbadged.length).toBeGreaterThan(0);
   evidence.recordAssertionEvidence(
-    "The picker badges only the gateway provider group as via OpenWork Gateway",
+    "The picker badges only the gateway provider group as via myai Gateway",
     `Model ${wireModelId} is selectable under ${String(gatewayModel?.providerName)}; group header ${JSON.stringify(gatewayGroup?.text)} carries the badge, ${otherBadged.length} other group(s) do, and ${unbadged.length} non-gateway group(s) do not.`,
     gatewayModel?.selectable === true && gatewayGroup?.badged === true && otherBadged.length === 0 && unbadged.length > 0,
   );

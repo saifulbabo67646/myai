@@ -38,7 +38,7 @@ test("a captured error renders the recovery screen with the details collapsed", 
   error.stack = "Error: render exploded\n    at sessionRoute (session-route.tsx:1797)";
   const html = renderFallback(error);
 
-  expect(html).toContain("OpenWork hit an unexpected error");
+  expect(html).toContain("myai hit an unexpected error");
   expect(html).toContain("Reload");
   expect(html).toContain('aria-expanded="false"');
   expect(html).toContain("Technical details");
@@ -269,7 +269,7 @@ test("the architecture check shows progress without mounting the gated applicati
         <ArchitectureMismatchGate><p>private workspace</p></ArchitectureMismatchGate>
       </BootStateProvider>,
     );
-    expect(html).toContain("Checking this OpenWork installation");
+    expect(html).toContain("Checking this myai installation");
     expect(html).toContain("Reload");
     expect(html).not.toContain("private workspace");
   } finally {
@@ -310,7 +310,7 @@ test.each(["ready", "error"])("pending startup remains actionable and settles to
         </StrictMode>,
       );
     });
-    expect(container.textContent).toContain("Starting OpenWork");
+    expect(container.textContent).toContain("Starting myai");
     expect(mounted).toBe(0);
     const retry = container.querySelector("button");
     expect(retry?.textContent).toBe("Reload");
@@ -321,12 +321,12 @@ test.each(["ready", "error"])("pending startup remains actionable and settles to
       if (outcome === "ready") startup.resolve(<Session />);
       else startup.reject(new Error("bootstrap IPC failed"));
     });
-    expect(container.textContent).not.toContain("Starting OpenWork");
+    expect(container.textContent).not.toContain("Starting myai");
     if (outcome === "ready") {
       expect(container.textContent).toBe("restored thread");
       expect(mounted).toBeGreaterThan(0);
     } else {
-      expect(container.textContent).toContain("OpenWork hit an unexpected error");
+      expect(container.textContent).toContain("myai hit an unexpected error");
       expect(container.textContent).toContain("Reload");
       expect(container.textContent).not.toContain("bootstrap IPC failed");
       expect(mounted).toBe(0);

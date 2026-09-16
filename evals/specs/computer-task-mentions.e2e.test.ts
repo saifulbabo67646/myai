@@ -109,7 +109,7 @@ test("computer mentions steer tasks through Connect and Automations names the co
     await user.notSee({ text: /Scheduled durably|headlessly|fixed Desktop/ });
     await user.screenshot();
     await user.click({ role: "button", label: /Daily project summary/ });
-    await user.see({ text: "Runs on your desktop computer. Keep OpenWork open and connected at the scheduled time." });
+    await user.see({ text: "Runs on your desktop computer. Keep myai open and connected at the scheduled time." });
     evidence.recordAssertionEvidence("Automation placement is visible and understandable", "The automation list labels its desktop computer; the detail explains that OpenWork must stay open and connected without runtime terminology.", true);
   });
 });

@@ -4,7 +4,7 @@ const ipcRenderer = electron && typeof electron === "object" ? electron.ipcRende
 const webFrame = electron && typeof electron === "object" ? electron.webFrame : null;
 
 // This function is serialized into the website's main JavaScript world. Keep it
-// self-contained: it must never close over Electron, Node, or OpenWork objects.
+// self-contained: it must never close over Electron, Node, or myai objects.
 function installWebMcpRuntime() {
   if (typeof document === "undefined" || typeof window === "undefined") return false;
   if (!globalThis.isSecureContext) return false;
