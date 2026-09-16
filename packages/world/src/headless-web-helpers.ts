@@ -216,7 +216,7 @@ export function buildHeadlessRuntimeManifest(input: {
     headlessLogPath: input.headlessLogPath,
     denTarget,
     denApiUrl: denTarget ? `${stripTrailingSlashes(input.webUrl)}/api/den` : null,
-    notes: "Local openwork-server session. Workspace auth uses token/hostToken; the server config and state selection are owned by the selected world. Den/Cloud API calls go same-origin through denApiUrl (Vite proxies them to denTarget; the app is pinned there via VITE_DEN_API_BASE_URL).",
+    notes: "Local openwork-server session. Workspace auth uses token/hostToken; the server config and state selection are owned by the selected world. myai ships no control plane, so cloud API calls are disabled unless a world configures denTarget: they then go same-origin through denApiUrl (Vite proxies them to denTarget; the app is pinned there via VITE_DEN_API_BASE_URL).",
     startedAt: input.startedAt ?? new Date().toISOString(),
     pid: launcherPid,
     pids: {
