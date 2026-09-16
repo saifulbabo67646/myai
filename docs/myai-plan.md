@@ -577,6 +577,9 @@ not a regression; no WP fixes them opportunistically.
   gained an `allowlistHonest` claim (red → green); DEC-1's MIT record preserved untouched.
   Open and left open: DEC-3 (prune depth) and the archive step above — the decision memo with
   options, affected files, deferrables, and must-never-remove items is in this PR's body.
+  Measured here: `pnpm --dir evals exec tsc -p tsconfig.json` reports 57 diagnostics, none in
+  WP-8's files (apps/app, apps/server, `apps/myai-server/src/store.ts`, one upstream spec) — the
+  growth from WP-0's recorded 44 is inherited, not introduced.
 
 ### 9.4 Recommended dispatch
 
