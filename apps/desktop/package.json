@@ -5,8 +5,7 @@
   "desktopName": "bd.myai.app",
   "description": "myai desktop shell",
   "author": {
-    "name": "myai",
-    "email": "support@openworklabs.com"
+    "name": "myai"
   },
   "main": "electron/main.mjs",
   "type": "module",

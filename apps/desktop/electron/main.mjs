@@ -162,7 +162,12 @@ if (BLANK_SLATE_LAUNCH.enabled || process.env.OPENWORK_ELECTRON_USE_MOCK_KEYCHAI
 }
 const RELEASE_DOWNLOAD_BASE_URL = "https://github.com/saifulbabo67646/myai/releases/latest/download";
 const RELEASE_PAGE_URL = "https://github.com/saifulbabo67646/myai/releases/latest";
-const DOCS_PAGE_URL = "https://openworklabs.com/docs";
+/**
+ * Documentation target for the native Help menu. myai ships no docs host: a
+ * distribution supplies its own through OPENWORK_DESKTOP_DOCS_URL. Empty keeps
+ * the Docs menu item out instead of advertising a borrowed site.
+ */
+const DOCS_PAGE_URL = (process.env.OPENWORK_DESKTOP_DOCS_URL ?? "").trim();
 const applicationMenu = createApplicationMenu({
   appName: APP_NAME,
   docsUrl: DOCS_PAGE_URL,
@@ -1040,7 +1045,15 @@ if (extraLaunchArgs) {
   }
 }
 configureFakeMediaForTests(app, envFlagEnabled("OPENWORK_ELECTRON_FAKE_MEDIA"));
-const DEFAULT_DEN_BASE_URL = "https://app.openworklabs.com";
+/**
+ * Control-plane origin this shell is distributed for. myai ships none: the
+ * upstream hosted default is gone, so the shell's fallback bootstrap carries an
+ * empty base URL and the renderer disables every cloud surface. A distribution
+ * points this at its own myai server through OPENWORK_DESKTOP_DEN_BASE_URL, or
+ * ships a desktop-bootstrap.json / accepted activation link, which take
+ * precedence over this fallback.
+ */
+const DEFAULT_DEN_BASE_URL = (process.env.OPENWORK_DESKTOP_DEN_BASE_URL ?? "").trim();
 const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:4096";
 const FORCE_DESKTOP_REQUIRE_SIGNIN =
   DESKTOP_DISTRIBUTION.requireSignin || envFlagEnabled("OPENWORK_FORCE_SIGNIN");

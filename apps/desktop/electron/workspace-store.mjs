@@ -116,8 +116,20 @@ const DEFAULT_DESKTOP_BOOTSTRAP_PATH = resolveDesktopBootstrapPath({ homeDir: os
 // LOCALAPPDATA and XDG_CONFIG_HOME. Keep reading that file when the canonical one
 // is missing so existing installs keep their deployment config.
 const LEGACY_DESKTOP_BOOTSTRAP_PATH = resolveLegacyDesktopBootstrapPath({ homeDir: os.homedir() });
-const HOSTED_DESKTOP_WEB_URL = "https://app.openworklabs.com";
-const HOSTED_DESKTOP_API_URL = "https://api.openworklabs.com";
+/**
+ * Hosted control-plane origins this distribution declares, if any.
+ *
+ * myai ships none: the upstream OpenWork Cloud defaults are gone, so no
+ * bootstrap candidate is preferred merely for pointing at a borrowed host. A
+ * distribution that *is* hosted declares its own origins through
+ * OPENWORK_DESKTOP_HOSTED_BASE_URL / OPENWORK_DESKTOP_HOSTED_API_URL. Read per
+ * call so a launcher that injects the environment during startup is honored.
+ */
+function configuredHostedDesktopOrigins() {
+  return [process.env.OPENWORK_DESKTOP_HOSTED_BASE_URL, process.env.OPENWORK_DESKTOP_HOSTED_API_URL]
+    .map((value) => (value ?? "").trim())
+    .filter(Boolean);
+}
 
 function bootstrapUrlOrigin(value) {
   if (typeof value !== "string" || !value.trim()) return "";
@@ -129,8 +141,9 @@ function bootstrapUrlOrigin(value) {
 }
 
 function isHostedDesktopBootstrapConfig(config) {
-  const baseUrlOrigin = bootstrapUrlOrigin(config?.baseUrl);
-  return baseUrlOrigin === HOSTED_DESKTOP_WEB_URL || baseUrlOrigin === HOSTED_DESKTOP_API_URL;
+  const configured = configuredHostedDesktopOrigins();
+  if (configured.length === 0) return false;
+  return configured.includes(bootstrapUrlOrigin(config?.baseUrl));
 }
 
 export function createWorkspaceStore({
