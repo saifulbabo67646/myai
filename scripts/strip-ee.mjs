@@ -113,6 +113,8 @@ if (existsSync(join(ROOT, "packaging/helm")) && readdirSync(join(ROOT, "packagin
 for (const rel of [
   "packaging/docker/Dockerfile.den",
   "packaging/docker/Dockerfile.den-gateway",
+  // Builds ee/apps/gateway + ee/packages/*; dead once ee/ is stripped.
+  "packaging/docker/Dockerfile.gateway",
   "packaging/docker/Dockerfile.den-web",
   "packaging/docker/Dockerfile.inference",
   "packaging/docker/den-dev-up.sh",
@@ -481,6 +483,7 @@ const DORMANT_ALLOWLIST = [
   "evals/runner/prepare-stack.ts",
   "evals/scripts/provision-org-connector-two-members.ts",
   ".devcontainer/start-daytona-server.sh",
+  ".devcontainer/Dockerfile.daytona-server",
 ];
 const scanDirs = ["apps", "packages", "scripts", "worlds", "evals", "packaging", ".github", ".devcontainer"];
 const leftovers = [];
@@ -492,7 +495,12 @@ function scan(dir) {
     if (SCAN_SKIP_DIRS.has(entry.name)) continue; // generated output; git history guard covers tracked content
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) scan(abs);
-    else if (/\.(ts|tsx|mjs|cjs|js|json|yml|yaml|sh|toml)$/.test(entry.name)) {
+    else if (
+        /\.(ts|tsx|mjs|cjs|js|json|yml|yaml|sh|toml)$/.test(entry.name)
+        // Build recipes carry no extension, so they were invisible to the
+        // scan; Dockerfile.gateway reached the public repo that way.
+        || /^(Dockerfile|Containerfile)/.test(entry.name)
+      ) {
       const rel = relative(ROOT, abs);
       if (rel === "scripts/strip-ee.mjs") continue; // this script's own patterns
       if (DORMANT_ALLOWLIST.includes(rel)) continue;
