@@ -25,6 +25,19 @@ function collectManifests(dir: string, found: string[] = []): string[] {
 const DEP_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
 const EE_SCOPE = "@openwork-ee" + "/";
 
+// strip-ee.mjs exempts these paths from its own EE scan; the exemption is only
+// honest while the file is there to be scanned.
+function readDormantAllowlist(): string[] {
+  const block = readRepoFile("scripts", "strip-ee.mjs").match(/const DORMANT_ALLOWLIST = \[([\s\S]*?)\n\];/)?.[1];
+  if (block === undefined) {
+    throw new Error("scripts/strip-ee.mjs declares no DORMANT_ALLOWLIST array");
+  }
+  return block
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .flatMap((line) => [...line.matchAll(/"([^"]+)"/g)].map((match) => match[1]));
+}
+
 briefTest(testBrief({
   behavior: "The myai repository boundary stays provably free of OpenWork Enterprise Edition code.",
   claims: {
@@ -42,6 +55,9 @@ briefTest(testBrief({
     }),
     noticesPresent: claim("LICENSE keeps the Different AI MIT notice and NOTICE ships attribution", {
       never: "MIT attribution requirements are dropped from the distribution",
+    }),
+    allowlistHonest: claim("every dormant allow-list entry in strip-ee.mjs names a file that exists", {
+      never: "a stale entry keeps a deleted path exempt from the EE scan",
     }),
   },
 }), async ({ prove }) => {
@@ -86,4 +102,10 @@ briefTest(testBrief({
   expect(notice).toContain("Different AI, Inc.");
   expect(notice).toContain("does not include OpenWork Enterprise Edition");
   prove.noticesPresent(true, "LICENSE reproduces the Different AI MIT notice; NOTICE states EE-free derivation");
+
+  const dormantAllowlist = readDormantAllowlist();
+  expect(dormantAllowlist).toContain("evals/specs/myai-ee-free-boundary.test.ts");
+  const staleEntries = dormantAllowlist.filter((entry) => !existsSync(join(repoRoot, entry)));
+  expect(staleEntries).toEqual([]);
+  prove.allowlistHonest(staleEntries.length === 0, `all ${dormantAllowlist.length} dormant allow-list entries name files that exist`);
 });

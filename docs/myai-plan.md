@@ -375,10 +375,10 @@ WP-8 housekeeping/decisions: anytime, owner = human
 | WP-2 | CI curation + guard hardening | WP-1 | A | ✅ done 2026-09-16 (PR #4) |
 | WP-3 | Endpoint neutralization (Phase 2) | WP-1 | B | ✅ done 2026-09-16 (PR #6) |
 | WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | ✅ done 2026-09-16 (PR #8) |
-| WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | 🔄 in review (PR: `wp/5-branding`, PR #7) |
+| WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | ✅ done 2026-09-16 (PR #7) |
 | WP-6 | Desktop ↔ server integration | WP-3 + WP-4a | D | waiting |
 | WP-7 | Deployment packaging + docs | WP-4 green | C | waiting |
-| WP-8 | Housekeeping & human decisions | — | anytime | open |
+| WP-8 | Housekeeping & human decisions | — | anytime | 🔄 in review (PR #9) — housekeeping landed; DEC-3 + archive step open (owner) |
 
 ### 9.3 WP cards
 
@@ -532,6 +532,15 @@ not a regression; no WP fixes them opportunistically.
   from `upstream/dev`, and merged into `main`; the fork's working tree was reset. WP-1 must
   re-verify it after the merge (see WP-1 conflict hotspots).
 - Port `spec-impact.test.ts` with MIT fixture paths (deleted at strip; tool itself remains).
+  - **Obsolete as written — reviewed 2026-09-16 (WP-8).** The card assumed the tool outlives the
+    spec; upstream retired all three pieces together: `evals/scripts/spec-impact.mjs`,
+    `evals/specs/spec-impact.test.ts`, and `.github/workflows/spec-impact.yml` are absent from
+    upstream (`openwork@93a142a92`, "remove e2e quarantine and spec-impact bookkeeping (#4378)"),
+    which `UPSTREAM_BASE` already carries. Nothing remains to port, and reviving the tool would
+    need a new CI lane — new work, not housekeeping. The two strip-ee references left behind
+    (the bulk-array entry that deleted the spec, the contract-snapshot prune) are inert because
+    their targets are absent and every helper is `existsSync`-guarded; they are kept deliberately
+    so they re-arm if upstream reintroduces the files.
 - **DEC-3 (opened by WP-1; owner: human):** how far to trim `evals/`. It ships nothing —
   not in the pnpm workspace, no shipped app depends on it, `pnpm build` never touches it — but
   it is 40% of a sync's churn (82k of 207k insertions in the WP-1 sync), the largest source of
@@ -548,7 +557,29 @@ not a regression; no WP fixes them opportunistically.
 - Clean dormant Den/Daytona eval infra (`evals/packages/{env,hosts,testkit}` den modules,
   `.devcontainer/start-daytona-server.sh`, allow-list in `strip-ee.mjs`) once WP-4 provides the
   replacement lane.
+  - **Reviewed 2026-09-16 (WP-8): gate met on paper, nothing removed.** Every listed path is
+    still referenced from things that run or are documented as live: the three packages'
+    barrels re-export the den modules, so the *blocking* `myai-ee-free-boundary.test.ts` loads
+    `env/src/{den,kind-stack,kind-server,daytona-k3s}.ts` and `hosts/src/{daytona,den-stack}.ts`
+    through `@openwork/testkit` on every PR, and `node --test packages/*/test/*.test.ts` (CI,
+    advisory) runs their unit tests; `.devcontainer/start-daytona-server.sh` is base64-embedded
+    by `.devcontainer/test-server-on-daytona.sh`, which `hosts/src/{daytona,local}.ts` invoke;
+    `worlds/lib/preview.ts` and `worlds/den-split-origin-kind.ts` sit on the same chain. Cutting
+    it means editing barrels, `DORMANT_ALLOWLIST`, and the `pnpm world` chain in one move — that
+    is DEC-3's prune, not housekeeping, so the call stays with the owner. The one item that was
+    unambiguously dead (a stale `DORMANT_ALLOWLIST` entry naming an upstream-deleted file) is
+    fixed in this PR, and the boundary guard now proves the allow-list resolves to real files.
 - Archive `saifulbabo67646/myai-old` after the first WP-1 cycle proves the sync ritual.
+  - **Still owner's call 2026-09-16 (WP-8):** the WP-1 cycle landed (PR #3), but WP-8 does not
+    archive, delete, or force-delete repositories — the owner runs this step.
+- **Landed 2026-09-16 (PR #9).** §9.2 WP-5 row flipped to done (PR #7);
+  `strip-ee.mjs`'s allow-list lost its one stale entry and `myai-ee-free-boundary.test.ts`
+  gained an `allowlistHonest` claim (red → green); DEC-1's MIT record preserved untouched.
+  Open and left open: DEC-3 (prune depth) and the archive step above — the decision memo with
+  options, affected files, deferrables, and must-never-remove items is in this PR's body.
+  Measured here: `pnpm --dir evals exec tsc -p tsconfig.json` reports 57 diagnostics, none in
+  WP-8's files (apps/app, apps/server, `apps/myai-server/src/store.ts`, one upstream spec) — the
+  growth from WP-0's recorded 44 is inherited, not introduced.
 
 ### 9.4 Recommended dispatch
 
