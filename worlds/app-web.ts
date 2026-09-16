@@ -51,9 +51,13 @@ export async function bootAppWebWorld(
   const selectedEnv = appWebEnvironment(env);
   const lifetimeMinutes = options.lifetimeMinutes ?? 120;
   if (!Number.isInteger(lifetimeMinutes) || lifetimeMinutes < 10 || lifetimeMinutes > 1430) throw new Error("app-web lifetime must be 10-1430 minutes.");
-  if (options.place === "daytona" && selectedEnv.OPENWORK_DEV_DEN_PROXY_TARGET !== undefined
-    && selectedEnv.OPENWORK_DEV_DEN_PROXY_TARGET !== "https://app.openworklabs.com") {
-    throw new Error("Remote app-web supports only https://app.openworklabs.com as its Den proxy target.");
+  // A remote (Daytona) app-web run may only proxy Den/API traffic to an
+  // explicitly configured control plane over TLS: myai ships no hosted origin
+  // to fall back on, and a plaintext target would carry credentials out of the
+  // sandbox in the clear. The target itself stays operator configuration.
+  const remoteDenTarget = selectedEnv.OPENWORK_DEV_DEN_PROXY_TARGET;
+  if (options.place === "daytona" && remoteDenTarget !== undefined && !/^https:\/\//i.test(remoteDenTarget)) {
+    throw new Error("Remote app-web requires an https Den proxy target; unset OPENWORK_DEV_DEN_PROXY_TARGET or use --place local.");
   }
   const runtimeName = `${receiptName("app-web", resolveStage(env))}-${randomUUID().slice(0, 8)}`;
   if (options.place === "local") {

@@ -7,7 +7,7 @@ import { ArrowLeft, Cloud, FileText, Globe, Maximize2, MoreHorizontal, PanelRigh
 
 import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-icon-src";
 import { t } from "../../../../i18n";
-import { buildDenAuthUrl, readDenBootstrapConfig } from "../../../../app/lib/den";
+import { buildDenAuthUrl, hasConfiguredControlPlane, readDenBootstrapConfig } from "../../../../app/lib/den";
 import { markDesktopSignInInitiated } from "../../../../app/lib/den-sign-in-intent";
 import { type OpenworkServerClient, type OpenworkServerStatus } from "../../../../app/lib/openwork-server";
 import { getDisplaySessionTitle } from "../../../../app/lib/session-title";
@@ -483,12 +483,19 @@ export function SessionPage(props: SessionPageProps) {
   const browserRailActive = panelRailActive && activePanelTab?.type === "browser";
   const filesRailActive = panelRailActive && activePanelTab?.type !== "browser";
   const selectBrowserTab = useSelectTab();
-  const showCloudSignIn = shellConfig.cloudSignin && !denAuth.isSignedIn && denAuth.status !== "checking";
+  // The Cloud sign-in button needs a control plane to sign in *to*; myai ships
+  // none, so it stays hidden until build or distribution config supplies one.
+  const showCloudSignIn = shellConfig.cloudSignin
+    && hasConfiguredControlPlane()
+    && !denAuth.isSignedIn
+    && denAuth.status !== "checking";
   const openCloudSignIn = useCallback(() => {
     const baseUrl = readDenBootstrapConfig().baseUrl;
+    const authUrl = buildDenAuthUrl(baseUrl, "sign-up");
+    if (!authUrl) return;
     markDesktopSignInInitiated();
     // Label stays "Sign in"; opens the sign-up tab so new users aren't defaulted into sign-in.
-    platform.openLink(buildDenAuthUrl(baseUrl, "sign-up"));
+    platform.openLink(authUrl);
   }, [platform]);
 
   useReactRenderWatchdog("SessionPage", {

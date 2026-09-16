@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
   differentialCloudVerdict,
@@ -10,7 +10,8 @@ import {
 } from "./agent-context-cloud-probe.js";
 
 const TOKEN = "Bearer ow_diagnostics_token_abcdefghijklmnopqrstuvwxyz";
-const ENDPOINT = "https://app.openworklabs.com/api/den/mcp/agent";
+const TRUSTED_ORIGIN = "https://den.trusted.example.test";
+const ENDPOINT = `${TRUSTED_ORIGIN}/api/den/mcp/agent`;
 const SESSION_ID = "diagnostics-session-id";
 const PROTOCOL_VERSION = "2025-06-18";
 
@@ -111,6 +112,12 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   throw new Error("Timed out waiting for test probe requests");
 }
 
+beforeEach(() => {
+  // myai ships no built-in cloud origin: an administrator has to name the
+  // diagnostics origin explicitly, exactly as a deployment would.
+  process.env.OPENWORK_AGENT_DIAGNOSTICS_TRUSTED_ORIGINS = TRUSTED_ORIGIN;
+});
+
 afterEach(() => {
   delete process.env.OPENWORK_AGENT_DIAGNOSTICS_TRUSTED_ORIGINS;
 });
@@ -186,7 +193,7 @@ describe("OpenWork Cloud catalog probe", () => {
       status: "observed",
       stage: "complete",
       code: "catalog_observed",
-      trustSource: "builtin-cloud",
+      trustSource: "administrator-env",
       enterpriseActivationPresent: false,
       networkCode: null,
       retryable: false,
@@ -293,11 +300,11 @@ describe("OpenWork Cloud catalog probe", () => {
       [{ config: null }, "cloud_mcp_missing"],
       [{ config: { type: "local", enabled: true } }, "cloud_mcp_not_remote"],
       [{ config: { type: "remote", enabled: false, url: ENDPOINT } }, "cloud_mcp_disabled"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.openworklabs.com/api/den/mcp/agent?token=secret", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.openworklabs.com/api/den/mcp/agent/", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.openworklabs.com/api/den/mcp/agent/status", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "https://app.openworklabs.com/api/den/mcp/agentish", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
-      [{ config: { type: "remote", enabled: true, url: "http://app.openworklabs.com/mcp/agent", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: `${ENDPOINT}?token=secret`, headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: `${ENDPOINT}/`, headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: `${ENDPOINT}/status`, headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: `${ENDPOINT}ish`, headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
+      [{ config: { type: "remote", enabled: true, url: "http://den.trusted.example.test/mcp/agent", headers: { Authorization: TOKEN } } }, "invalid_endpoint"],
       [{ config: { type: "remote", enabled: true, url: "https://localhost.evil/mcp/agent", headers: { Authorization: TOKEN } } }, "untrusted_endpoint"],
     ];
     for (const [overrides, code] of cases) {
@@ -1003,7 +1010,7 @@ describe("OpenWork Cloud catalog probe", () => {
       retryable: false,
       runtimeFamily: "bun",
       transport: "test-seam",
-      trustSource: "builtin-cloud",
+      trustSource: "administrator-env",
       enterpriseActivationPresent: false,
       httpStatus: 200,
       durationMs: 1,

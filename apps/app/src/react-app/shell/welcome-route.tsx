@@ -356,8 +356,13 @@ export function WelcomeRoute() {
   const handleTeamSignIn = useCallback(() => {
     markOnboardingComplete();
     const settings = readDenSettings();
+    // No configured control plane (the myai ship state) means no sign-in page
+    // to open, so the CTA finishes onboarding locally instead of opening a
+    // blank or borrowed page.
+    const authUrl = buildDenAuthUrl(settings.baseUrl || DEFAULT_DEN_BASE_URL, "sign-in");
+    if (!authUrl) return;
     markDesktopSignInInitiated();
-    platform.openLink(buildDenAuthUrl(settings.baseUrl || DEFAULT_DEN_BASE_URL, "sign-in"));
+    platform.openLink(authUrl);
   }, [markOnboardingComplete, platform]);
 
   const finishOnboarding = useCallback(() => {

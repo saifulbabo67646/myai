@@ -5,7 +5,7 @@ declare const expect: (value: unknown) => {
   toBe: (expected: unknown) => void;
 };
 
-import { DEFAULT_DEN_BASE_URL, HOSTED_DEFAULT_DEN_BASE_URL, setDenBootstrapConfig } from "../../../app/lib/den";
+import { DEFAULT_DEN_BASE_URL, setDenBootstrapConfig } from "../../../app/lib/den";
 import {
   hasOpenWorkModelsAvailable,
   isOpenWorkModelsPromoEligible,
@@ -20,8 +20,12 @@ afterEach(async () => {
 });
 
 describe("OpenWork Models promo eligibility", () => {
-  test("allows promotions on the default Den URL after normalization", () => {
-    expect(isOpenWorkModelsPromoEligibleForDenBaseUrl(`${HOSTED_DEFAULT_DEN_BASE_URL}/api/den/`)).toBe(true);
+  test("suppresses promotions for every reachable control plane", () => {
+    // myai declares no hosted control plane (VITE_DEN_HOSTED_BASE_URL is
+    // unset), so the hosted-only upsell is never eligible — not even for the
+    // build's own configured server or a path-normalized variant of it.
+    expect(isOpenWorkModelsPromoEligibleForDenBaseUrl(DEFAULT_DEN_BASE_URL)).toBe(false);
+    expect(isOpenWorkModelsPromoEligibleForDenBaseUrl(`${DEFAULT_DEN_BASE_URL}/api/den/`)).toBe(false);
   });
 
   test("suppresses promotions for custom configured Den URLs", async () => {

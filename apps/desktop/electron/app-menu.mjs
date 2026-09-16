@@ -214,12 +214,16 @@ export function createApplicationMenu({ appName, docsUrl, getWindow, closeBrowse
                 },
                 { type: "separator" },
               ]),
-          {
-            label: "Docs",
-            click: () => {
-              runDetachedTask("open documentation from menu", () => shell.openExternal(docsUrl));
-            },
-          },
+          // myai ships no docs host: the item only exists for a distribution
+          // that configured one (see DOCS_PAGE_URL in main.mjs).
+          ...(docsUrl
+            ? [{
+                label: "Docs",
+                click: () => {
+                  runDetachedTask("open documentation from menu", () => shell.openExternal(docsUrl));
+                },
+              }]
+            : []),
         ],
       },
     ]);

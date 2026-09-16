@@ -6,6 +6,17 @@ import { Input } from "@/components/ui/input";
 import { useDenAuth } from "./den-auth-provider";
 import { tryOpenBrowserAuthUrl } from "./open-browser-auth";
 
+/** The re-auth link for a configured control plane, or null when there is none. */
+function denReauthUrl(baseUrl: string, nonce: string) {
+  try {
+    const url = new URL("/reauth/desktop", baseUrl);
+    url.searchParams.set("nonce", nonce);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
 /** Verification replaces only this account's session; it cannot enroll another account or workspace. */
 export function DenReauthNotice({ onVerified, onCancel }: {
   onVerified: (client: ReturnType<typeof createDenClient>, commitSession: () => void) => Promise<void>;
@@ -23,11 +34,13 @@ export function DenReauthNotice({ onVerified, onCancel }: {
   const completeRef = useRef(onVerified);
   completeRef.current = onVerified;
 
-  const url = new URL("/reauth/desktop", settings.baseUrl);
-  url.searchParams.set("nonce", nonce);
+  // A re-auth link only exists for a configured control plane. myai ships no
+  // default host, so an unconfigured build renders no notice instead of
+  // throwing on an empty base URL.
+  const url = denReauthUrl(settings.baseUrl, nonce);
   // Keep the opaque account reference out of requests; the browser gets the
   // email from its own matching session or asks the user to enter it.
-  url.hash = new URLSearchParams({ userId: user?.id ?? "" }).toString();
+  if (url) url.hash = new URLSearchParams({ userId: user?.id ?? "" }).toString();
 
   useEffect(() => {
     active.current = true;
@@ -101,6 +114,8 @@ export function DenReauthNotice({ onVerified, onCancel }: {
     window.addEventListener(deepLinkBridgeEvent, receive);
     return () => window.removeEventListener(deepLinkBridgeEvent, receive);
   }, [nonce]);
+
+  if (!url) return null;
 
   return <div className="space-y-3 rounded-lg border p-4">
     <p className="text-sm font-medium">Confirm your identity to share apps</p>

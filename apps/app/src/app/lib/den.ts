@@ -85,10 +85,28 @@ const ORG_SCOPE_HEADER = "x-openwork-org-id";
 const DEFAULT_DEN_TIMEOUT_MS = 12_000;
 
 export const DEFAULT_DEN_AUTH_NAME = "myai User";
+/**
+ * Control-plane origins come from build config only. myai ships no default
+ * host: the upstream OpenWork Cloud default is gone, so a release build has
+ * nothing to talk to until distribution config supplies an origin through
+ * `VITE_DEN_BASE_URL` / `VITE_DEN_API_BASE_URL` (build), the shell's
+ * `desktop-bootstrap.json`, an accepted activation link, or an OpenWork
+ * gateway origin. An empty value means "no control plane": every cloud
+ * surface is hidden and no request can be issued.
+ */
 const BUILD_DEN_BASE_URL =
   (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_BASE_URL === "string"
     ? import.meta.env.VITE_DEN_BASE_URL
-    : "").trim() || "https://app.openworklabs.com";
+    : "").trim();
+/**
+ * The hosted control-plane origin this build is *distributed* for, if any.
+ * Unset in myai: nothing is "hosted OpenWork Cloud", so hosted-only upsell
+ * surfaces stay hidden and no host is special-cased, derived, or healed.
+ */
+const BUILD_DEN_HOSTED_BASE_URL =
+  (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_HOSTED_BASE_URL === "string"
+    ? import.meta.env.VITE_DEN_HOSTED_BASE_URL
+    : "").trim();
 const BUILD_DEN_REQUIRE_SIGNIN =
   (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_REQUIRE_SIGNIN === "string"
     ? /^(1|true|yes|on)$/i.test(import.meta.env.VITE_DEN_REQUIRE_SIGNIN.trim())
@@ -115,8 +133,6 @@ function readForceEnvDenSettings(): boolean {
     : false);
 }
 
-export const HOSTED_DEFAULT_DEN_BASE_URL = "https://app.openworklabs.com";
-export const HOSTED_DEFAULT_DEN_API_BASE_URL = "https://api.app.openworklabs.com";
 export const DEFAULT_DEN_BASE_URL = BUILD_DEN_BASE_URL;
 export const DEN_INFERENCE_PATH = "/dashboard/inference";
 
@@ -706,41 +722,71 @@ export function denOriginComparisonKey(input: string | null | undefined): string
 }
 
 /**
- * True when the effective Den control plane is not the hosted OpenWork Cloud
- * (app.openworklabs.com). Self-hosted deployments point the app at their own
- * control plane via VITE_DEN_BASE_URL or the desktop bootstrap config, so
- * hosted-only surfaces (e.g. OpenWork Models upsells) should stay hidden.
+ * True when `baseUrl` is the hosted control-plane origin this build declares
+ * (`VITE_DEN_HOSTED_BASE_URL`). myai declares none, so this is false for every
+ * origin a myai build can reach.
+ */
+export function isHostedControlPlaneUrl(baseUrl: string | null | undefined): boolean {
+  const hosted = denOriginComparisonKey(BUILD_DEN_HOSTED_BASE_URL);
+  return hosted !== null && denOriginComparisonKey(baseUrl) === hosted;
+}
+
+/**
+ * True when the effective control plane is not a hosted offering. Self-hosted
+ * deployments (every myai deployment, including a configured myai server) point
+ * the app at their own control plane via VITE_DEN_BASE_URL or the desktop
+ * bootstrap config, so hosted-only surfaces (e.g. OpenWork Models upsells)
+ * stay hidden.
  */
 export function isSelfHostedControlPlane(): boolean {
-  return (
-    denOriginComparisonKey(readDenSettings().baseUrl) !==
-    denOriginComparisonKey(HOSTED_DEFAULT_DEN_BASE_URL)
-  );
+  return !isHostedControlPlaneUrl(readDenSettings().baseUrl);
 }
 
 export function getDenInferenceUrl(baseUrl?: string | null): string {
-  const normalized = normalizeDenBaseUrl(baseUrl ?? readDenSettings().baseUrl) ?? DEFAULT_DEN_BASE_URL;
-  return `${normalized}${DEN_INFERENCE_PATH}`;
+  const normalized = normalizeDenBaseUrl(baseUrl ?? readDenSettings().baseUrl);
+  return normalized ? `${normalized}${DEN_INFERENCE_PATH}` : "";
+}
+
+/** True when no control plane is configured, so no Den request may be issued. */
+export function hasConfiguredControlPlane(baseUrl?: string | null): boolean {
+  return denOriginComparisonKey(baseUrl ?? readDenSettings().baseUrl) !== null;
+}
+
+/**
+ * The host of the hosted control-plane origin this build declares, if any.
+ * `null` (the myai ship state) means no host is hosted, so nothing is derived
+ * from or healed to an OpenWork host.
+ */
+function configuredHostedHostname(): string | null {
+  const hosted = denOriginComparisonKey(BUILD_DEN_HOSTED_BASE_URL);
+  if (!hosted) return null;
+  try {
+    return new URL(hosted).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 function isHostedWebAppHost(hostname: string): boolean {
-  return hostname.trim().toLowerCase().startsWith("app.");
+  const hostedHost = configuredHostedHostname();
+  if (!hostedHost) return false;
+  const normalized = hostname.trim().toLowerCase();
+  if (normalized === hostedHost) return true;
+  // A subdomain is the hosted web app too — except its own `api.` sibling,
+  // which already serves the API and must not be rewritten again.
+  return normalized.endsWith(`.${hostedHost}`) && !normalized.startsWith("api.");
 }
 
 function directHostedApiMcpResourceUrl(input: URL): string | null {
-  if (input.protocol !== "https:" || input.hostname.toLowerCase() !== "app.openworklabs.com") {
+  if (input.protocol !== "https:" || !isHostedWebAppHost(input.hostname)) {
     return null;
   }
   const pathname = input.pathname.replace(/\/+$/, "");
   if (pathname !== "/mcp" && pathname !== "/api/den/mcp") {
     return null;
   }
-  const output = new URL(input.toString());
-  output.hostname = "api.app.openworklabs.com";
-  output.pathname = "/mcp";
-  output.search = "";
-  output.hash = "";
-  return output.toString().replace(/\/+$/, "");
+  const apiOrigin = denApiOriginForDenBaseUrl(input.origin);
+  return apiOrigin ? `${apiOrigin}/mcp` : null;
 }
 
 function stripDenApiBasePath(input: string | null | undefined): string | null {
@@ -780,24 +826,31 @@ function ensureDenApiBasePath(input: string | null | undefined): string | null {
   }
 }
 
-const HOSTED_DEN_APEX_HOST = "openworklabs.com";
-
+/**
+ * True for the hosted origin's own host or any of its subdomains. With no
+ * hosted origin declared (myai's ship state) this is false: no base URL gets a
+ * derived `api.` sibling, so every deployment keeps its same-origin `/api/den`
+ * proxy unless it configures an explicit API base.
+ */
 function isHostedDenHost(hostname: string): boolean {
+  const hostedHost = configuredHostedHostname();
+  if (!hostedHost) return false;
   const normalized = hostname.trim().toLowerCase();
-  return normalized === HOSTED_DEN_APEX_HOST || normalized.endsWith(`.${HOSTED_DEN_APEX_HOST}`);
+  return normalized === hostedHost || normalized.endsWith(`.${hostedHost}`);
 }
 
 /**
- * The deterministic API origin for a Den base URL, without runtime config.
+ * The deterministic API origin for a control-plane base URL, without runtime
+ * config.
  *
  * Only two shapes are known ahead of time:
  * - An explicit API host (`api.*`) is already the API origin.
- * - Hosted OpenWork Cloud (`*.openworklabs.com`) serves its API at the
- *   `api.`-prefixed host.
+ * - A hosted deployment (the origin this build declares via
+ *   `VITE_DEN_HOSTED_BASE_URL`) serves its API at the `api.`-prefixed host.
  *
- * Every other deployment (self-hosted single host, localhost, tunnel or
- * sandbox preview hosts with single-label wildcard certificates) keeps the
- * same-origin `/api/den` proxy. Inventing `api.<host>` there produced
+ * Every other deployment (self-hosted single host, myai server, localhost,
+ * tunnel or sandbox preview hosts with single-label wildcard certificates)
+ * keeps the same-origin `/api/den` proxy. Inventing `api.<host>` there produced
  * unreachable origins and TLS names the deployment's certificate cannot
  * cover, which broke desktop sign-in. Runtime config (`denApiUrl`) remains
  * the source of truth when present.
@@ -881,16 +934,22 @@ function resolveDenClientBaseUrls(options: { baseUrl: string; apiBaseUrl?: strin
   return resolveDenBaseUrls(options);
 }
 
-/** The MCP endpoint served from the resolved Den API base URL. */
+/**
+ * The MCP endpoint served from the resolved control-plane API base URL.
+ * Empty when no control plane is configured: the caller must not offer a
+ * cloud MCP entry at all.
+ */
 export function getDenMcpUrl(): string {
   const { apiBaseUrl } = resolveDenBaseUrls(readDenBootstrapConfig());
-  return `${apiBaseUrl.replace(/\/+$/, "")}/mcp`;
+  const normalized = apiBaseUrl.replace(/\/+$/, "");
+  return normalized ? `${normalized}/mcp` : "";
 }
 
 /**
  * Detects MCP URLs written by older builds that pointed `/mcp` at the bare
- * web-app origin (e.g. `https://app.openworklabs.com/mcp`). Nothing serves
- * MCP there — those entries fail with a 404 and must be reconfigured.
+ * web-app origin of the hosted deployment (e.g. `<hosted>/mcp`). Nothing
+ * serves MCP there — those entries fail with a 404 and must be reconfigured.
+ * False whenever this build declares no hosted origin (the myai ship state).
  */
 export function isLegacyWebAppMcpUrl(input: string | null | undefined): boolean {
   if (!input) return false;
@@ -905,10 +964,10 @@ export function isLegacyWebAppMcpUrl(input: string | null | undefined): boolean 
 /**
  * Resolve the URL the cloud MCP entry should connect to from a minted
  * token's `resource`. Older den-api builds mint the bare web-app origin
- * (`https://app.openworklabs.com/mcp`) where nothing serves MCP — heal
- * those to the `/api/den` proxy on the same origin instead of trusting
- * them verbatim. Returns null when the resource is unusable so callers
- * can keep their bootstrap-derived URL.
+ * (`<hosted>/mcp`) where nothing serves MCP — heal those to the `/api/den`
+ * proxy on the same origin instead of trusting them verbatim. Returns null
+ * when the resource is unusable so callers can keep their
+ * bootstrap-derived URL.
  */
 export function resolveCloudMcpResourceUrl(resource: string | null | undefined): string | null {
   const trimmed = resource?.trim() ?? "";
@@ -1272,12 +1331,12 @@ export async function initializeDenBootstrapConfig(): Promise<DenBootstrapConfig
   // All quick attempts failed. Keep build defaults in memory only — do NOT
   // sync them to localStorage: previously synced values from a successful
   // boot are more trustworthy than build defaults, and clobbering them
-  // silently reverted custom/self-hosted control planes to the production
-  // URL until a manual reload. The snapshot stays `unresolved`: it is a
-  // recovery placeholder, not a real hosted selection, so retained
-  // credentials remain quarantined until an authoritative read succeeds.
+  // silently reverted custom/self-hosted control planes to the build's
+  // default URL until a manual reload. The snapshot stays `unresolved`: it is
+  // a recovery placeholder, not a real selection, so retained credentials
+  // remain quarantined until an authoritative read succeeds.
   desktopBootstrapConfig = resolveDenBootstrapConfig({
-    baseUrl: HOSTED_DEFAULT_DEN_BASE_URL,
+    baseUrl: BUILD_DEN_BASE_URL,
     requireSignin: BUILD_DEN_REQUIRE_SIGNIN,
   });
   desktopBootstrapResolution = "unresolved";
@@ -1408,8 +1467,14 @@ function canUseCloudWebAuthReturn(origin: string): boolean {
   }
 }
 
+/**
+ * The browser sign-in/up URL for a control plane. Empty when no control plane
+ * is configured: callers must not open a browser at a host nobody chose.
+ */
 export function buildDenAuthUrl(baseUrl: string, mode: "sign-in" | "sign-up"): string {
-  const target = new URL(resolveDenBaseUrls(baseUrl).baseUrl);
+  const resolved = resolveDenBaseUrls(baseUrl).baseUrl;
+  if (!resolved) return "";
+  const target = new URL(resolved);
   target.searchParams.set("mode", mode);
   const webReturnOrigin =
     isWebDeployment() && typeof window !== "undefined" ? window.location.origin : null;
@@ -2877,7 +2942,13 @@ async function requestJsonRaw<T>(
   options: DenRequestOptions = {},
 ): Promise<RawJsonResponse<T>> {
   const baseUrls = typeof input === "string" ? resolveDenBaseUrls(input) : input;
-  const url = `${resolveRequestBaseUrl(baseUrls, path)}${path}`;
+  const requestBaseUrl = resolveRequestBaseUrl(baseUrls, path);
+  // Fail closed: with no control plane configured there is no origin to send
+  // this to, so a cloud request must not escape as a relative or invented URL.
+  if (!denOriginComparisonKey(requestBaseUrl)) {
+    throw new DenApiError(0, "control_plane_not_configured", "No myai server is configured for this build.");
+  }
+  const url = `${requestBaseUrl}${path}`;
   const headers: Record<string, string> = { Accept: "application/json" };
   const token = options.token?.trim() ?? "";
   if (token) {

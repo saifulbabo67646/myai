@@ -4,8 +4,17 @@ const ENV_FEEDBACK_URL = String(import.meta.env.VITE_OPENWORK_FEEDBACK_URL ?? ""
 const ENV_APP_VERSION = String(import.meta.env.VITE_OPENWORK_APP_VERSION ?? "").trim();
 const ENV_BUILD_SHA = String(import.meta.env.VITE_OPENWORK_BUILD_SHA ?? "").trim();
 
-export const DEFAULT_FEEDBACK_URL =
-  ENV_FEEDBACK_URL || "https://openworklabs.com/feedback";
+/**
+ * Feedback target. myai ships no feedback host: a distribution points this at
+ * its own endpoint through `VITE_OPENWORK_FEEDBACK_URL`. Empty means no
+ * feedback endpoint is configured, so `buildFeedbackUrl` refuses to invent one.
+ */
+export const DEFAULT_FEEDBACK_URL = ENV_FEEDBACK_URL;
+
+/** False when no feedback endpoint is configured, so no host can be contacted. */
+export function hasFeedbackTarget(): boolean {
+  return DEFAULT_FEEDBACK_URL !== "";
+}
 
 type FeedbackUrlOptions = {
   entrypoint: string;
@@ -84,7 +93,12 @@ function parseClientOsContext(): ClientOsContext {
   return platform ? { platform } : {};
 }
 
+/**
+ * The feedback URL, or "" when no feedback endpoint is configured. Callers
+ * must hide their entry point instead of opening a host nobody chose.
+ */
 export function buildFeedbackUrl(options: FeedbackUrlOptions): string {
+  if (!hasFeedbackTarget()) return "";
   const url = new URL(DEFAULT_FEEDBACK_URL);
   const osContext = parseClientOsContext();
   const deployment = options.deployment ?? (isDesktopRuntime() ? "desktop" : "web");

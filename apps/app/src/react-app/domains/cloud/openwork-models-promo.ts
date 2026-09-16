@@ -3,12 +3,11 @@ import { INFERENCE_MODEL_ALIASES } from "@openwork/types/den/inference";
 import {
   buildDenAuthUrl,
   getDenInferenceUrl,
+  isHostedControlPlaneUrl,
   isSelfHostedControlPlane,
-  HOSTED_DEFAULT_DEN_BASE_URL,
   readDenBootstrapConfig,
   readDenSettings,
 } from "../../../app/lib/den";
-import { isDefaultControlPlaneUrl } from "../settings/cloud/control-plane-url";
 import { denSettingsChangedEvent } from "../../../app/lib/den-session-events";
 import { useSyncExternalStore } from "react";
 
@@ -32,7 +31,9 @@ export function areOpenWorkModelsPromosDisabled() {
 }
 
 export function isOpenWorkModelsPromoEligibleForDenBaseUrl(baseUrl: string) {
-  return !areOpenWorkModelsPromosDisabled() && isDefaultControlPlaneUrl(baseUrl, HOSTED_DEFAULT_DEN_BASE_URL);
+  // OpenWork Models is a hosted offering. myai declares no hosted control
+  // plane, so this is false for every origin a myai build can reach.
+  return !areOpenWorkModelsPromosDisabled() && isHostedControlPlaneUrl(baseUrl);
 }
 
 export function isOpenWorkModelsPromoEligible() {

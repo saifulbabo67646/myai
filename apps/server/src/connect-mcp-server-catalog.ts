@@ -26,17 +26,21 @@ export const CONNECT_DIRECT_MCP_SERVER_NAME_PREFIX = "openwork-direct-";
 export const CONNECT_MCP_APP_HOST_CAPABILITY_HEADER = "x-openwork-mcp-client-capabilities";
 export const CONNECT_MCP_APP_HOST_CAPABILITY = "mcp-app-host-v1";
 
-const BUILTIN_APP_HOST_CLOUD_ORIGINS = new Set([
-  "https://api.openworklabs.com",
-  "https://app.openworklabs.com",
-  "https://api.openwork.software",
-  "https://app.openwork.software",
-]);
+/**
+ * Built-in cloud origins, empty by design: myai ships no hosted control plane,
+ * so the only trusted origins are administrator-provisioned (an activated
+ * control-plane origin) or loopback in development. Naming a host here would
+ * make a release build trust a deployment nobody configured.
+ */
+const BUILTIN_APP_HOST_CLOUD_ORIGINS = new Set<string>();
 
-const BUILTIN_APP_HOST_GATEWAY_PROXY_ORIGINS = new Map([
-  ["https://app.openworklabs.com", "https://api.openworklabs.com"],
-  ["https://app.openwork.software", "https://api.openwork.software"],
-]);
+/**
+ * Built-in gateway proxy pairs (web origin → api origin). myai ships none: a
+ * deployment that fronts its control plane through a gateway on a different
+ * origin must be declared by configuration, so cross-origin descriptors fail
+ * closed by default.
+ */
+const BUILTIN_APP_HOST_GATEWAY_PROXY_ORIGINS = new Map<string, string>();
 
 const indexSchema = z.object({
   schemaVersion: z.literal(CONNECT_MCP_SERVER_INDEX_SCHEMA_VERSION),
@@ -147,11 +151,11 @@ function normalizeAppHostProxyUrl(
   if (serverEndpoint.search || serverEndpoint.hash) return null;
   if (serverEndpoint.origin === cloudEndpoint.origin) return serverEndpoint.toString();
 
-  // Hosted Desktop talks to Den through the app-origin gateway, while Den's
-  // authenticated member index names its canonical api-origin proxy. Keep the
-  // credential on the configured app origin by translating only this exact,
-  // built-in proxy pair and exact per-connection path. Arbitrary cross-origin
-  // descriptors still fail closed.
+  // A deployment that fronts its control plane through a gateway keeps the
+  // credential on the configured app origin by declaring that exact proxy pair
+  // (BUILTIN_APP_HOST_GATEWAY_PROXY_ORIGINS) and matching the exact
+  // per-connection path. myai declares no pair, so arbitrary cross-origin
+  // descriptors fail closed.
   if (BUILTIN_APP_HOST_GATEWAY_PROXY_ORIGINS.get(cloudEndpoint.origin) !== serverEndpoint.origin) return null;
   const cloudTerminalPath = "/mcp/agent";
   if (!cloudEndpoint.pathname.endsWith(cloudTerminalPath) || cloudEndpoint.search || cloudEndpoint.hash) return null;

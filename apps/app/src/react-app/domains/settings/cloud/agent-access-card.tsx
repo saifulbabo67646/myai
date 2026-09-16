@@ -38,17 +38,24 @@ import { t } from "@/i18n";
 
 const CLOUD_MCP_REFRESH_MARGIN_MS = 24 * 60 * 60 * 1000;
 
-function denManageConnectionsUrl() {
-  return new URL("/dashboard/mcp-connections", readDenSettings().baseUrl).toString();
+/** The control plane's connections dashboard, or null when none is configured. */
+function denManageConnectionsUrl(): string | null {
+  try {
+    return new URL("/dashboard/mcp-connections", readDenSettings().baseUrl).toString();
+  } catch {
+    return null;
+  }
 }
 
 function ManageInDenButton() {
+  const manageUrl = denManageConnectionsUrl();
+  if (!manageUrl) return null;
   return (
     <Button
       variant="outline"
       size="sm"
       className="w-fit"
-      onClick={() => void openDesktopUrl(denManageConnectionsUrl())}
+      onClick={() => void openDesktopUrl(manageUrl)}
     >
       {t("connect.manage_in_den_web")}
       <ArrowUpRight size={13} />

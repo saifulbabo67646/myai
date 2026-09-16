@@ -69,7 +69,7 @@ describe("Den sign-out", () => {
     expect(requests).toEqual(["https://api.den.test/api/auth/sign-out"]);
   });
 
-  test("routes hosted desktop sign-out to the nested hosted API default", async () => {
+  test("never invents an api. sibling for a bare web origin (no hosted default ships)", async () => {
     const requests: string[] = [];
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -85,11 +85,14 @@ describe("Den sign-out", () => {
     });
 
     await createDenClient({
-      baseUrl: "https://app.openworklabs.com",
+      baseUrl: "https://app.den.test",
       token: "tok_test",
     }).signOut();
 
-    expect(requests).toEqual(["https://api.app.openworklabs.com/api/auth/sign-out"]);
+    // myai declares no hosted control plane (VITE_DEN_HOSTED_BASE_URL is
+    // unset), so the API origin stays the configured origin's own /api/den
+    // proxy rather than a derived api.* host nobody configured.
+    expect(requests).toEqual(["https://app.den.test/api/den/api/auth/sign-out"]);
   });
 
   test("keeps legacy desktop proxy API bases working for sign-out", async () => {

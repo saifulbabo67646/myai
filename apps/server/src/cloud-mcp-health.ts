@@ -678,6 +678,13 @@ function defaultDesiredMetadata(config: Record<string, unknown> | null, connectC
   };
 }
 
+/**
+ * Canonicalizes a cloud MCP endpoint URL.
+ *
+ * myai heals nothing: the upstream hosted-desktop rewrite that mapped the
+ * web-app origin's `/api/den/mcp/agent` onto its `api.` sibling is gone, so
+ * the configured origin is used exactly as given.
+ */
 function normalizeCloudEndpointUrl(value: string): string | null {
   try {
     const url = new URL(value);
@@ -685,11 +692,6 @@ function normalizeCloudEndpointUrl(value: string): string | null {
     if (url.search || url.hash) return null;
     const normalizedPath = url.pathname.replace(/\/+$/, "") || "/";
     if (!normalizedPath.endsWith("/mcp/agent")) return null;
-    if (url.protocol === "https:" && url.hostname.toLowerCase() === "app.openworklabs.com" && normalizedPath === "/api/den/mcp/agent") {
-      url.hostname = "api.app.openworklabs.com";
-      url.pathname = "/mcp/agent";
-      return url.toString();
-    }
     url.pathname = normalizedPath;
     return url.toString();
   } catch {
@@ -703,26 +705,21 @@ function canonicalizeCloudMcpConfig(config: Record<string, unknown>): Record<str
   return normalizedUrl ? { ...config, url: normalizedUrl } : config;
 }
 
-const BUILT_IN_CLOUD_MCP_ORIGINS = new Set([
-  "https://api.openworklabs.com",
-  "https://api.app.openworklabs.com",
-]);
-
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "[::1]" || normalized === "::1";
 }
 
 /**
- * Whether a proposed openwork-cloud endpoint may be persisted as the
+ * Whether a proposed cloud MCP endpoint may be persisted as the
  * account-global desired config by a collaborator-scoped client.
  *
  * The desired config is global: one write reconfigures Connect for every
- * workspace this server hosts. Built-in OpenWork Cloud origins, the
- * administrator-activated enterprise Den origin, and loopback (local
- * development Dens) are trusted; anything else requires owner scope so a
- * collaborator on one shared workspace cannot silently redirect every other
- * workspace's Connect tools to an attacker-controlled endpoint.
+ * workspace this server hosts. myai trusts the administrator-activated
+ * control-plane origin and loopback (local development servers) only — it
+ * ships no built-in hosted origin — so anything else requires owner scope and
+ * a collaborator on one shared workspace cannot silently redirect every other
+ * workspace's Connect tools to somebody else's endpoint.
  */
 export async function isTrustedCloudMcpEndpointForGlobalPersist(rawUrl: string): Promise<boolean> {
   const normalized = normalizeCloudEndpointUrl(rawUrl);
@@ -738,7 +735,6 @@ export async function isTrustedCloudMcpEndpointForGlobalPersist(rawUrl: string):
   }
   if (isLoopbackHostname(url.hostname)) return true;
   if (url.protocol !== "https:") return false;
-  if (BUILT_IN_CLOUD_MCP_ORIGINS.has(url.origin)) return true;
   const { readActivatedEnterpriseDenOrigin } = await import("./enterprise-den-origin.js");
   const enterpriseOrigin = await readActivatedEnterpriseDenOrigin();
   return enterpriseOrigin !== null && url.origin === enterpriseOrigin;

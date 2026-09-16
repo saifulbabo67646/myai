@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +29,16 @@ import { createWorkspaceKvStore } from "./workspace-kv-store.js";
 const roots: string[] = [];
 const previousRuntimeDb = process.env.OPENWORK_RUNTIME_DB;
 const previousBootstrapPath = process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH;
+const previousDevMode = process.env.OPENWORK_DEV_MODE;
+
+/**
+ * The control-plane origin this installation is activated against. myai ships
+ * no built-in cloud origin, so app-host trust has to be administrator
+ * provisioned; the fixture writes exactly the activation record the desktop
+ * writes after a signed activation claim verifies.
+ */
+const TRUSTED_ORIGIN = "https://den.trusted.example.test";
+const CROSS_ORIGIN = "https://api.den.trusted.example.test";
 
 afterEach(async () => {
   while (roots.length) await rm(roots.pop() ?? "", { recursive: true, force: true });
@@ -36,13 +46,34 @@ afterEach(async () => {
   else process.env.OPENWORK_RUNTIME_DB = previousRuntimeDb;
   if (previousBootstrapPath === undefined) delete process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH;
   else process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = previousBootstrapPath;
+  if (previousDevMode === undefined) delete process.env.OPENWORK_DEV_MODE;
+  else process.env.OPENWORK_DEV_MODE = previousDevMode;
 });
+
+/**
+ * Writes the activation record the desktop writes only after a signed
+ * activation claim verifies, and points the server at it. This is how the
+ * administrator-provisioned control-plane origin becomes trusted; without it
+ * every non-loopback app-host endpoint fails closed.
+ */
+async function activateTrustedControlPlane(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), "openwork-connect-mcp-activation-"));
+  roots.push(root);
+  const bootstrapPath = join(root, "desktop-bootstrap.json");
+  await writeFile(bootstrapPath, JSON.stringify({
+    enterpriseActivation: {
+      activatedAt: "2026-01-01T00:00:00.000Z",
+      denBaseUrl: TRUSTED_ORIGIN,
+    },
+  }));
+  process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = bootstrapPath;
+}
 
 async function fixtureConfig(): Promise<ServerConfig> {
   const root = await mkdtemp(join(tmpdir(), "openwork-connect-mcp-servers-"));
   roots.push(root);
   process.env.OPENWORK_RUNTIME_DB = join(root, "runtime.sqlite");
-  process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = join(root, "desktop-bootstrap.json");
+  await activateTrustedControlPlane();
   return {
     host: "127.0.0.1",
     port: 0,
@@ -68,7 +99,7 @@ function indexFetcher(
     connectionId: "emc_01k28e8q8pf8r9sff9mhyqxved",
     name: "Project Atlas",
     description: null,
-    url: "https://api.openworklabs.com/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved",
+    url: "https://den.trusted.example.test/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved",
   }],
 ) {
   return async (url: string, init?: RequestInit) => {
@@ -102,7 +133,7 @@ describe("OpenWork Connect MCP server catalog", () => {
     const readOnlyConfig = { ...config, readOnly: true };
     const dbPath = runtimeDbPath(config);
     const cloudMcp = {
-      type: "remote", enabled: true, url: "https://api.openworklabs.com/mcp/agent",
+      type: "remote", enabled: true, url: "https://den.trusted.example.test/mcp/agent",
       headers: { Authorization: "Bearer member-token" },
     };
     expect(await readOpenWorkConnectMcpAppHostAuthorizationReady(readOnlyConfig, "ws_1", cloudMcp)).toBe(false);
@@ -120,23 +151,27 @@ describe("OpenWork Connect MCP server catalog", () => {
     await writeOpenWorkConnectMcpAppHostAuthorization(config, "ws_1", "Bearer private-app-host-token", cloudMcp.url);
     expect(await readOpenWorkConnectMcpAppHostAuthorizationReady(readOnlyConfig, "ws_1", cloudMcp)).toBe(true);
     expect(await readOpenWorkConnectMcpAppHostAuthorizationReady(readOnlyConfig, "ws_2", cloudMcp)).toBe(false);
+    // A second, independently trusted origin (loopback in development) has no
+    // stored credential of its own: readiness is bound to the exact origin the
+    // private App-host credential was provisioned for.
+    process.env.OPENWORK_DEV_MODE = "1";
     expect(await readOpenWorkConnectMcpAppHostAuthorizationReady(readOnlyConfig, "ws_1", {
-      ...cloudMcp, url: "https://api.openwork.software/mcp/agent",
+      ...cloudMcp, url: "https://127.0.0.1/mcp/agent",
     })).toBe(false);
     expect(await readOpenWorkConnectMcpAppHostAuthorizationReady(readOnlyConfig, "ws_1", cloudMcp)).toBe(true);
   });
 
   test("reports malformed stored private authorization as not provisioned", async () => {
     const config = await fixtureConfig();
-    const cloudMcp = { type: "remote", enabled: true, url: "https://api.openworklabs.com/mcp/agent" };
+    const cloudMcp = { type: "remote", enabled: true, url: "https://den.trusted.example.test/mcp/agent" };
     const authorizations = createWorkspaceKvStore<string>({
       tableName: "connect_mcp_app_host_authorizations", valueColumn: "authorization_json",
       parse: (json) => json, serialize: (json) => json,
     });
     for (const value of [
       "not-json",
-      JSON.stringify({ authorization: 123, origin: "https://api.openworklabs.com" }),
-      JSON.stringify({ authorization: "Bearer token with spaces", origin: "https://api.openworklabs.com" }),
+      JSON.stringify({ authorization: 123, origin: "https://den.trusted.example.test" }),
+      JSON.stringify({ authorization: "Bearer token with spaces", origin: "https://den.trusted.example.test" }),
       JSON.stringify({ authorization: "Bearer private-app-host-token", origin: "not-an-origin" }),
     ]) {
       await authorizations.set(config, "ws_1", value);
@@ -146,7 +181,7 @@ describe("OpenWork Connect MCP server catalog", () => {
 
   test("leaves private authorization readiness unknown for ineligible endpoints", async () => {
     const config = await fixtureConfig();
-    const cloudMcp = { type: "remote", enabled: true, url: "https://api.openworklabs.com/mcp/agent" };
+    const cloudMcp = { type: "remote", enabled: true, url: "https://den.trusted.example.test/mcp/agent" };
     await writeOpenWorkConnectMcpAppHostAuthorization(config, "ws_1", "Bearer private-app-host-token", cloudMcp.url);
     for (const endpoint of [null, { ...cloudMcp, enabled: false }, { ...cloudMcp, type: "local" }, { ...cloudMcp, url: "not-a-url" }]) {
       expect(await readOpenWorkConnectMcpAppHostAuthorizationReady(config, "ws_1", endpoint)).toBeNull();
@@ -157,10 +192,11 @@ describe("OpenWork Connect MCP server catalog", () => {
   });
 
   test("reads the member catalog through an authenticated MCP resource", async () => {
+    await activateTrustedControlPlane();
     const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
     const index = await readOpenWorkConnectMcpServerIndex({
       type: "remote",
-      url: "https://api.openworklabs.com/mcp/agent",
+      url: "https://den.trusted.example.test/mcp/agent",
       headers: { Authorization: "Bearer member-token" },
     }, "Bearer private-app-host-token", indexFetcher(requests));
 
@@ -175,22 +211,43 @@ describe("OpenWork Connect MCP server catalog", () => {
       === CONNECT_MCP_APP_HOST_CAPABILITY)).toBe(true);
   });
 
-  test("keeps hosted api-origin provider proxies on the credential-bound app gateway origin", async () => {
-    const index = await readOpenWorkConnectMcpServerIndex({
+  test("keeps a same-origin proxy descriptor verbatim and fails closed across origins", async () => {
+    await activateTrustedControlPlane();
+    const cloudUrl = "https://den.trusted.example.test/api/den/mcp/agent";
+    // myai declares no built-in gateway proxy pair, so a descriptor that names
+    // another origin is rejected instead of being translated back onto the
+    // credential-bound configured origin.
+    const crossOrigin = await readOpenWorkConnectMcpServerIndex({
       type: "remote",
-      url: "https://app.openworklabs.com/api/den/mcp/agent",
-    }, "Bearer private-app-host-token", indexFetcher([]));
+      url: cloudUrl,
+    }, "Bearer private-app-host-token", indexFetcher([], [{
+      connectionId: "emc_01k28e8q8pf8r9sff9mhyqxved",
+      name: "Project Atlas",
+      description: null,
+      url: `${CROSS_ORIGIN}/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved`,
+    }]));
+    expect(crossOrigin).toBeNull();
 
-    expect(index?.servers[0]?.url).toBe(
-      "https://app.openworklabs.com/api/den/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved",
-    );
+    // The same-origin descriptor is the accepted form and is used exactly as
+    // configured, so the credential stays on the origin it was provisioned for.
+    const sameOriginDescriptor = "https://den.trusted.example.test/mcp/agent/connections/emc_01k28e8q8pf8r9sff9mhyqxved";
+    const sameOrigin = await readOpenWorkConnectMcpServerIndex({
+      type: "remote",
+      url: cloudUrl,
+    }, "Bearer private-app-host-token", indexFetcher([], [{
+      connectionId: "emc_01k28e8q8pf8r9sff9mhyqxved",
+      name: "Project Atlas",
+      description: null,
+      url: sameOriginDescriptor,
+    }]));
+    expect(sameOrigin?.servers[0]?.url).toBe(sameOriginDescriptor);
   });
 
   test("reconciles only OpenWork-owned proxy entries and preserves user MCPs", async () => {
     const config = await fixtureConfig();
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
-        "openwork-cloud": { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+        "openwork-cloud": { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
         "user-server": { type: "remote", url: "https://user.example/mcp" },
         "openwork-connect-stale": { type: "remote", url: "https://cloud.example/stale" },
       },
@@ -201,7 +258,7 @@ describe("OpenWork Connect MCP server catalog", () => {
       workspace: config.workspaces[0]!,
       cloudMcp: {
         type: "remote",
-        url: "https://api.openworklabs.com/mcp/agent",
+        url: "https://den.trusted.example.test/mcp/agent",
         headers: { Authorization: "Bearer member-token" },
       },
       appHostAuthorization: "Bearer private-app-host-token",
@@ -216,7 +273,7 @@ describe("OpenWork Connect MCP server catalog", () => {
       directNames: [],
       removedNames: ["openwork-connect-stale"],
     });
-    expect(runtime.mcp?.["openwork-cloud"]).toEqual({ type: "remote", url: "https://api.openworklabs.com/mcp/agent" });
+    expect(runtime.mcp?.["openwork-cloud"]).toEqual({ type: "remote", url: "https://den.trusted.example.test/mcp/agent" });
     expect(runtime.mcp?.["user-server"]).toEqual({ type: "remote", url: "https://user.example/mcp" });
     expect(runtime.mcp?.["openwork-connect-stale"]).toBeUndefined();
     expect(Object.keys(runtime.mcp ?? {}).some((name) => name.startsWith("openwork-connect-"))).toBe(false);
@@ -227,7 +284,7 @@ describe("OpenWork Connect MCP server catalog", () => {
         connectionId,
         name: "Project Atlas",
         description: null,
-        url: `https://api.openworklabs.com/mcp/agent/connections/${connectionId}`,
+        url: `https://den.trusted.example.test/mcp/agent/connections/${connectionId}`,
         exposeDirectly: false,
       }],
     });
@@ -243,12 +300,12 @@ describe("OpenWork Connect MCP server catalog", () => {
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
         "user-server": { type: "remote", url: "https://user.example/mcp" },
-        "openwork-direct-revoked-abc123": { type: "remote", url: "https://api.openworklabs.com/mcp/agent/connections/emc_01revoked" },
+        "openwork-direct-revoked-abc123": { type: "remote", url: "https://den.trusted.example.test/mcp/agent/connections/emc_01revoked" },
       },
     }));
     const cloudMcp = {
       type: "remote",
-      url: "https://api.openworklabs.com/mcp/agent",
+      url: "https://den.trusted.example.test/mcp/agent",
       enabled: true,
       headers: { Authorization: "Bearer member-token" },
     };
@@ -258,8 +315,8 @@ describe("OpenWork Connect MCP server catalog", () => {
       cloudMcp,
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [
-        { ...direct, description: null, url: `https://api.openworklabs.com/mcp/agent/connections/${directId}`, exposeDirectly: true },
-        { connectionId: boundedId, name: "Bounded", description: null, url: `https://api.openworklabs.com/mcp/agent/connections/${boundedId}` },
+        { ...direct, description: null, url: `https://den.trusted.example.test/mcp/agent/connections/${directId}`, exposeDirectly: true },
+        { connectionId: boundedId, name: "Bounded", description: null, url: `https://den.trusted.example.test/mcp/agent/connections/${boundedId}` },
       ]),
     });
 
@@ -273,7 +330,7 @@ describe("OpenWork Connect MCP server catalog", () => {
     const runtime = await readRuntimeOpencodeConfig(config, "ws_1");
     expect(runtime.mcp?.[directName]).toEqual({
       type: "remote",
-      url: `https://api.openworklabs.com/mcp/agent/connections/${directId}`,
+      url: `https://den.trusted.example.test/mcp/agent/connections/${directId}`,
       enabled: true,
       headers: { Authorization: "Bearer member-token" },
       oauth: false,
@@ -290,7 +347,7 @@ describe("OpenWork Connect MCP server catalog", () => {
       cloudMcp,
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [
-        { ...direct, description: null, url: `https://api.openworklabs.com/mcp/agent/connections/${directId}`, exposeDirectly: false },
+        { ...direct, description: null, url: `https://den.trusted.example.test/mcp/agent/connections/${directId}`, exposeDirectly: false },
       ]),
     });
     expect(revoked.directNames).toEqual([]);
@@ -304,10 +361,10 @@ describe("OpenWork Connect MCP server catalog", () => {
     const result = await reconcileOpenWorkConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [
-        { connectionId: directId, name: "Linear", description: null, url: `https://api.openworklabs.com/mcp/agent/connections/${directId}`, exposeDirectly: true },
+        { connectionId: directId, name: "Linear", description: null, url: `https://den.trusted.example.test/mcp/agent/connections/${directId}`, exposeDirectly: true },
       ]),
     });
     expect(result.status).toBe("synced");
@@ -318,12 +375,12 @@ describe("OpenWork Connect MCP server catalog", () => {
   test("an unavailable index purges directly exposed entries instead of trusting a stale catalog", async () => {
     const config = await fixtureConfig();
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
-      mcp: { "openwork-direct-linear-abc123": { type: "remote", url: "https://api.openworklabs.com/mcp/agent/connections/emc_01x" } },
+      mcp: { "openwork-direct-linear-abc123": { type: "remote", url: "https://den.trusted.example.test/mcp/agent/connections/emc_01x" } },
     }));
     const result = await reconcileOpenWorkConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       fetcher: async () => new Response(null, { status: 404 }),
     });
     expect(result).toEqual({
@@ -342,14 +399,14 @@ describe("OpenWork Connect MCP server catalog", () => {
     const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
-        "openwork-cloud": { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+        "openwork-cloud": { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       },
     }));
     await writeOpenWorkConnectMcpAppHostAuthorization(
       config,
       "ws_1",
       "Bearer private-app-host-token",
-      "https://api.openworklabs.com/mcp/agent",
+      "https://den.trusted.example.test/mcp/agent",
     );
 
     const result = await refreshOpenWorkConnectMcpAppHostCatalog(config, "ws_1", indexFetcher(requests));
@@ -364,14 +421,14 @@ describe("OpenWork Connect MCP server catalog", () => {
     const connectionId = "emc_01lastknowngood";
     await writeRuntimeOpencodeConfig(config, "ws_1", () => ({
       mcp: {
-        "openwork-cloud": { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+        "openwork-cloud": { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       },
     }));
     await writeOpenWorkConnectMcpAppHostAuthorization(
       config,
       "ws_1",
       "Bearer private-app-host-token",
-      "https://api.openworklabs.com/mcp/agent",
+      "https://den.trusted.example.test/mcp/agent",
     );
     await writeOpenWorkConnectMcpAppHostCatalog(config, "ws_1", {
       schemaVersion: "openwork.connect/mcp-servers/1",
@@ -379,7 +436,7 @@ describe("OpenWork Connect MCP server catalog", () => {
         connectionId,
         name: "Last known good",
         description: null,
-        url: `https://api.openworklabs.com/mcp/agent/connections/${connectionId}`,
+        url: `https://den.trusted.example.test/mcp/agent/connections/${connectionId}`,
         exposeDirectly: false,
       }],
     });
@@ -402,7 +459,7 @@ describe("OpenWork Connect MCP server catalog", () => {
     const result = await reconcileOpenWorkConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       fetcher: async () => new Response(null, { status: 404 }),
     });
     expect(result).toEqual({
@@ -427,7 +484,7 @@ describe("OpenWork Connect MCP server catalog", () => {
     const result = await reconcileOpenWorkConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], []),
     });
@@ -450,7 +507,7 @@ describe("OpenWork Connect MCP server catalog", () => {
     await reconcileOpenWorkConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher(trustedRequests),
     });
@@ -478,7 +535,7 @@ describe("OpenWork Connect MCP server catalog", () => {
     const result = await reconcileOpenWorkConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [{
         connectionId: "emc_01crossorigin",
@@ -492,18 +549,18 @@ describe("OpenWork Connect MCP server catalog", () => {
     expect((await readOpenWorkConnectMcpAppHostCatalog(config, "ws_1")).servers).toEqual([]);
   });
 
-  test("rejects a hosted api-origin descriptor that is not the exact connection proxy", async () => {
+  test("rejects a cross-origin descriptor that is not the exact connection proxy", async () => {
     const config = await fixtureConfig();
     const result = await reconcileOpenWorkConnectMcpServers({
       config,
       workspace: config.workspaces[0]!,
-      cloudMcp: { type: "remote", url: "https://app.openworklabs.com/api/den/mcp/agent" },
+      cloudMcp: { type: "remote", url: "https://den.trusted.example.test/api/den/mcp/agent" },
       appHostAuthorization: "Bearer private-app-host-token",
       fetcher: indexFetcher([], [{
         connectionId: "emc_01crossorigin",
         name: "Wrong proxy path",
         description: null,
-        url: "https://api.openworklabs.com/mcp/agent/connections/another-connection",
+        url: `${CROSS_ORIGIN}/mcp/agent/connections/another-connection`,
       }]),
     });
 
@@ -511,9 +568,10 @@ describe("OpenWork Connect MCP server catalog", () => {
     expect((await readOpenWorkConnectMcpAppHostCatalog(config, "ws_1")).servers).toEqual([]);
   });
   test("attributes malformed JSON and invalid index schemas without returning provider data", async () => {
+    await activateTrustedControlPlane();
     for (const text of ["not-json", JSON.stringify({ schemaVersion: "unsupported", servers: [] })]) {
       const result = await readOpenWorkConnectMcpServerIndexWithDiagnostics(
-        { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+        { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
         "Bearer private-app-host-token",
         async (url, init) => {
           const response = await indexFetcher([])(url, init);
@@ -526,9 +584,10 @@ describe("OpenWork Connect MCP server catalog", () => {
   });
 
   test("does not mislabel HTTP failures as missing auth or a successful empty catalog", async () => {
+    await activateTrustedControlPlane();
     for (const status of [401, 403, 404, 503]) {
       const result = await readOpenWorkConnectMcpServerIndexWithDiagnostics(
-        { type: "remote", url: "https://api.openworklabs.com/mcp/agent" },
+        { type: "remote", url: "https://den.trusted.example.test/mcp/agent" },
         "Bearer private-app-host-token",
         async () => new Response(null, { status }),
       );

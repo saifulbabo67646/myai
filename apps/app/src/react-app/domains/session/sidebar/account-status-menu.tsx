@@ -36,9 +36,11 @@ import {
   buildDenAuthUrl,
   clearDenSession,
   createDenClient,
+  hasConfiguredControlPlane,
   readDenBootstrapConfig,
   readDenSettings,
 } from "../../../../app/lib/den";
+import { denSettingsChangedEvent } from "../../../../app/lib/den-session-events";
 import { markDesktopSignInInitiated } from "../../../../app/lib/den-sign-in-intent";
 import { exchangeHandoffAndSignIn } from "../../../../app/lib/den-handoff";
 import { parseManualAuthInput } from "../../../../app/lib/manual-auth-input";
@@ -57,7 +59,11 @@ import {
   useOpenWorkModelsPromoEligibility,
 } from "../../cloud/openwork-models-promo";
 
-const DOCS_URL = "https://openworklabs.com/docs";
+/**
+ * Documentation target. myai ships no docs host: a distribution points this at
+ * its own docs site through `VITE_OPENWORK_DOCS_URL`. Empty hides the entry.
+ */
+const DOCS_URL = String(import.meta.env.VITE_OPENWORK_DOCS_URL ?? "").trim();
 const BOOT_STARTED_AT = Date.now();
 const INITIALIZING_MS = 15_000;
 
@@ -219,6 +225,16 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   const [initializing, setInitializing] = useState(
     () => Date.now() - BOOT_STARTED_AT < INITIALIZING_MS,
   );
+  // The Cloud sign-in affordance requires a control plane to sign in *to*.
+  // myai ships none, so it stays hidden until build or distribution config
+  // supplies one; nothing here may open a borrowed host.
+  const [controlPlaneConfigured, setControlPlaneConfigured] = useState(hasConfiguredControlPlane);
+
+  useEffect(() => {
+    const sync = () => setControlPlaneConfigured(hasConfiguredControlPlane());
+    window.addEventListener(denSettingsChangedEvent, sync);
+    return () => window.removeEventListener(denSettingsChangedEvent, sync);
+  }, []);
 
   const hasOpenWorkModels = useMemo(
     () => hasOpenWorkModelsProvider(props.providerConnectedIds),
@@ -234,7 +250,9 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   }, [initializing]);
 
   const openSettings = props.onOpenAccountSettings;
-  const openDocs = useCallback(() => platform.openLink(DOCS_URL), [platform]);
+  const openDocs = useCallback(() => {
+    if (DOCS_URL) platform.openLink(DOCS_URL);
+  }, [platform]);
   // When the organization blocks settings control, the settings surface is the
   // Cloud account page only, so the entry is labelled for where it lands and
   // the Debug shortcut is hidden.
@@ -310,8 +328,12 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   const showStatus = shellConfig.statusBar && (runtimeStatus !== null || connectStatus !== null);
 
   const openSignIn = () => {
+    // No configured control plane means no sign-in page to open: keep the
+    // button inert rather than opening a blank or borrowed page.
+    const url = buildDenAuthUrl(readDenBootstrapConfig().baseUrl, "sign-up");
+    if (!url) return;
     markDesktopSignInInitiated();
-    platform.openLink(buildDenAuthUrl(readDenBootstrapConfig().baseUrl, "sign-up"));
+    platform.openLink(url);
   };
 
   const submitPastedCode = async () => {
@@ -495,7 +517,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
             {controlSettingsBlocked ? t("settings.tab_cloud_account") : t("status.settings")}
           </DropdownMenuItem>
         ) : null}
-        {shellConfig.docsButton ? (
+        {shellConfig.docsButton && DOCS_URL ? (
           <DropdownMenuItem onClick={openDocs}>
             <BookOpen className="size-3.5" />
             {t("status.docs")}
@@ -512,7 +534,7 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
             <LogOut className="size-3.5" />
             Log out
           </DropdownMenuItem>
-        ) : restoringSession ? null : (
+        ) : restoringSession || !controlPlaneConfigured ? null : (
           <div
             className="flex flex-col gap-2 px-2 py-2"
             onPointerDown={(event) => event.stopPropagation()}

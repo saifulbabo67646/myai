@@ -56,7 +56,7 @@ function fakeWorld(failure?: "launch" | "verify" | "source") {
       assert.match(name, /^app-web--test-stage-/);
       assert.equal(workspace, "/workspace");
       assert.equal(receipt.actualSha, ref);
-      const expectedEnv: NodeJS.ProcessEnv = { OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY: "1", OPENWORK_DEV_DEN_PROXY_TARGET: "https://app.openworklabs.com",
+      const expectedEnv: NodeJS.ProcessEnv = { OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY: "1", OPENWORK_DEV_DEN_PROXY_TARGET: "https://myai.team.example.test",
         VITE_DISABLE_OPENWORK_MODELS: "0", OPENWORK_WEB_PORT: "5178", VITE_HOST: "0.0.0.0" };
       assert.deepEqual(options, {
         browserHostSuffix: ".example.test",
@@ -74,7 +74,7 @@ function fakeWorld(failure?: "launch" | "verify" | "source") {
 }
 
 const callerEnv = { OPENWORK_WORLD_STAGE: "test-stage", OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY: "1", OPENWORK_TOKEN: "never-transfer",
-  OPENWORK_DEV_DEN_PROXY_TARGET: "https://app.openworklabs.com",
+  OPENWORK_DEV_DEN_PROXY_TARGET: "https://myai.team.example.test",
   OPENWORK_WORLD_SELECTED_ENV_KEYS: '["OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY","OPENWORK_DEV_DEN_PROXY_TARGET"]' };
 
 test("app-web world composes owned private provisioning, exact source, runtime and secret browser output", async () => {
@@ -90,11 +90,13 @@ test("app-web world composes owned private provisioning, exact source, runtime a
   assert.deepEqual(calls, ["track", "provision", "preview", "launch", "verify", "stop", "delete"]);
 });
 
-test("remote unsupported targets fail before provisioning", async () => {
-  for (const target of ["http://127.0.0.1:3000", "https://custom.example.test", "http://app.openworklabs.com"]) {
+test("remote plaintext Den targets fail before provisioning", async () => {
+  // myai pins no hosted origin: the target is operator configuration, but a
+  // remote sandbox may only carry credentials to it over TLS.
+  for (const target of ["http://127.0.0.1:3000", "http://den.example.test"]) {
     const { deps, calls, ref } = fakeWorld();
     await using stack = new AsyncDisposableStack();
-    await assert.rejects(bootAppWebWorld(stack, { place: "daytona", ref }, { ...callerEnv, OPENWORK_DEV_DEN_PROXY_TARGET: target }, deps), /supports only/);
+    await assert.rejects(bootAppWebWorld(stack, { place: "daytona", ref }, { ...callerEnv, OPENWORK_DEV_DEN_PROXY_TARGET: target }, deps), /requires an https Den proxy target/);
     assert.deepEqual(calls, []);
   }
 });
