@@ -496,6 +496,19 @@ not a regression; no WP fixes them opportunistically.
   from `upstream/dev`, and merged into `main`; the fork's working tree was reset. WP-1 must
   re-verify it after the merge (see WP-1 conflict hotspots).
 - Port `spec-impact.test.ts` with MIT fixture paths (deleted at strip; tool itself remains).
+- **DEC-3 (opened by WP-1; owner: human):** how far to trim `evals/`. It ships nothing —
+  not in the pnpm workspace, no shipped app depends on it, `pnpm build` never touches it — but
+  it is 40% of a sync's churn (82k of 207k insertions in the WP-1 sync), the largest source of
+  EE re-coupling (40 of 95 path entries in `strip-ee.mjs`), and holds 180 specs of which
+  exactly 1 is myai-owned. Sequencing matters: `strip-ee.mjs` already removes everything that
+  *imports* EE, so what remains are specs exercising cloud/Den/enterprise **product surfaces**
+  through the MIT client — WP-3 decides which of those surfaces still exist, so pruning before
+  WP-3 lands is guesswork. Tiers and evidence: see the WP-1 PR analysis.
+  - Must keep regardless: `evals/specs/myai-ee-free-boundary.test.ts` (the only automated proof
+    of the EE-free claim, and a §9.1 repo-wide invariant), `@openwork/testkit` (the guard
+    imports it), and the `pnpm world up` chain (`bin/`, local `worlds/`, `packages/world`).
+  - Note: both exit checks red at WP-1 (`lint:layers`, the `mock-google` self-test) live inside
+    evals and are inherited upstream debt; a trim would retire them rather than fix them.
 - Clean dormant Den/Daytona eval infra (`evals/packages/{env,hosts,testkit}` den modules,
   `.devcontainer/start-daytona-server.sh`, allow-list in `strip-ee.mjs`) once WP-4 provides the
   replacement lane.
