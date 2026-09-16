@@ -2,7 +2,7 @@
 import { use, type ReactNode } from "react";
 
 // Startup gates cannot depend on the providers they are still waiting to mount.
-export function StartupScreen({ message = "Starting OpenWork" }: { message?: string }) {
+export function StartupScreen({ message = "Starting myai" }: { message?: string }) {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-dls-surface p-6 text-dls-primary">
       <div className="flex max-w-sm flex-col items-center gap-4 text-center text-sm">

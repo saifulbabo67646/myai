@@ -1,5 +1,5 @@
 /**
- * Web error monitoring for the OpenWork web deployment (Sentry, zero-dependency).
+ * Web error monitoring for the myai web deployment (Sentry, zero-dependency).
  *
  * Principles (mirrors `analytics.ts`):
  * - Detection-first: report that a web instance failed to boot or hit an

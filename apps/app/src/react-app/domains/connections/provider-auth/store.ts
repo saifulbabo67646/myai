@@ -2204,7 +2204,7 @@ export function createProviderAuthStore(options: CreateProviderAuthStoreOptions)
   async function startGatewayProviderOAuth(providerId: string, credentialSetId?: string) {
     const orgId = readDenSettings().activeOrgId;
     const client = options.openworkServer.getSnapshot().openworkServerClient;
-    if (!orgId || !client) throw new Error("Sign in to OpenWork before connecting this provider.");
+    if (!orgId || !client) throw new Error("Sign in to myai before connecting this provider.");
     await pushDenSession();
     return client.startGatewayProviderOAuth(providerId, orgId, credentialSetId);
   }

@@ -1,7 +1,7 @@
 // Keep selected built-in-browser logins in step with a browser profile.
 //
 // Consent and policy are separate: policy only makes setup available, while
-// the user explicitly chooses one profile and the sites OpenWork may keep
+// the user explicitly chooses one profile and the sites myai may keep
 // reading. Cookie values stay inside this main-process module. Persisted state,
 // IPC responses, renderer state, and errors contain metadata only.
 import { execFile } from "node:child_process";

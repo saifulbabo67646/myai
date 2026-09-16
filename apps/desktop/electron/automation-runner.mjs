@@ -232,7 +232,7 @@ export async function executeDesktopAutomation(assignment, options) {
   }
 }
 
-/** Delivers a remote command as a normal visible local OpenWork session. */
+/** Delivers a remote command as a normal visible local myai session. */
 export async function executeDesktopRemoteSession(assignment, options) {
   const local = await options.getLocalRuntime()
   if (!local?.baseUrl || !local?.token) throw new Error("The desktop runtime is unavailable")

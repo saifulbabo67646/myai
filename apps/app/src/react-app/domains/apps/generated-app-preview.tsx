@@ -30,6 +30,6 @@ export function GeneratedAppPreview({ html, payload, title, revision, presentati
     return <p role="status" className="text-sm text-muted-foreground">Connect a workspace to open the preview.</p>;
   }
   return <McpAppSandboxView origin={origin} app={resource} toolName={title} inputArguments={PREVIEW_ARGUMENTS}
-    result={result} unavailableNotice="This app could not open. Try reopening it, or ask OpenWork to fix the preview."
+    result={result} unavailableNotice="This app could not open. Try reopening it, or ask myai to fix the preview."
     initialHeight={360} presentation={presentation} />;
 }

@@ -40,7 +40,7 @@ export function taxonomyForDirectoryEntry(entry: McpDirectoryInfo): ExtensionTax
 }
 
 /**
- * The MCPs category lists third-party servers only. OpenWork's own runtimes
+ * The MCPs category lists third-party servers only. myai's own runtimes
  * (Computer Use, the browser panel, Ollama, UI control) and auto-managed
  * plumbing such as Cloud Control are app functionality, not MCPs to browse;
  * their setup pages stay reachable by direct link.

@@ -263,7 +263,7 @@ export function createBrowserTaskHost({ getTab, tabsFor, ownerOf, activeFor, isV
     let tab, state, dispatched = false, timer, abort, openingController;
     try {
       if (typeof sessionId !== "string" || !sessionId.trim()) fail("missing_session", "Browser control requires a requesting conversation.");
-      if (!enabled()) fail("browser_disabled", "Enable OpenWork Browser in Library, or ask your organization to allow browser control.");
+      if (!enabled()) fail("browser_disabled", "Enable myai Browser in Library, or ask your organization to allow browser control.");
       if (operation === "tabs") return { ok: true, provider: "builtin", externalBrowsers: "unsupported", tabs: tabsFor(sessionId).map((item) => ({ tabId: item.tabId, url: safeUrl(item.view.webContents.getURL()), title: item.view.webContents.getTitle().slice(0, 300), visible: isVisible(item.tabId), ...stateFor(item.tabId), observation: undefined, controller: undefined })) };
       if (pausedSessions.has(sessionId)) fail("paused", "The user has browser control. Resume in the browser panel before continuing.");
       // Existing same-origin opener/popup pages can navigate each other. Enroll

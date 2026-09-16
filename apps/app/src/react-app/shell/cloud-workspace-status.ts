@@ -99,8 +99,8 @@ export function cloudWorkspaceTakeoverCopy(input: {
 }): { title: string; body: string } {
   if (input.variant === "access-required") {
     return {
-      title: "OpenWork Web needs an active plan",
-      body: "Your organization does not have an active OpenWork Web subscription or complimentary access. Get OpenWork Web in Den to start your cloud workspace.",
+      title: "myai Web needs an active plan",
+      body: "Your organization does not have an active myai Web subscription or complimentary access. Get myai Web in Den to start your cloud workspace.",
     };
   }
   if (input.variant === "failed") {
@@ -269,9 +269,9 @@ export function mapCloudWorkspaceState(input: {
   if (input.accessRequired) {
     return {
       variant: "access-required",
-      label: "OpenWork Web plan required",
+      label: "myai Web plan required",
       tone: "amber",
-      statusLine: "OpenWork Web plan required",
+      statusLine: "myai Web plan required",
       ...lines,
       updateAvailable,
       showUpdate: false,

@@ -69,7 +69,7 @@ export type ModelPickerModalProps = {
   openWorkModelsSyncing?: boolean;
   onRefreshOrganizationModels?: () => void | Promise<void>;
   restrictToCloud?: boolean;
-  /** Runtime provider ids routed through the OpenWork inference gateway (sync status source "openwork_gateway"). */
+  /** Runtime provider ids routed through the myai inference gateway (sync status source "openwork_gateway"). */
   gatewayProviderIds?: ReadonlySet<string>;
   /** Gateway providers waiting on this member's sign-in; shown as a compact "Connect" hint. */
   gatewayConnectProviders?: GatewayConnectProvider[];

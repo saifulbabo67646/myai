@@ -33,7 +33,7 @@ export function describeCrash(thrown: unknown): CrashDetails {
 
 /** Clipboard payload: message, stack, app version and distribution flavor. */
 export function buildCrashReport(crash: CrashDetails, context: CrashContext): string {
-  const header = `OpenWork ${context.version} (${context.deployment}, ${context.flavor})`;
+  const header = `myai ${context.version} (${context.deployment}, ${context.flavor})`;
   return [header, crash.message, crash.stack].filter((line) => line.length > 0).join("\n\n");
 }
 
@@ -98,7 +98,7 @@ function RecoveryScreen({ crash }: { crash: CrashDetails }) {
     <div className="flex h-screen w-screen items-center justify-center bg-background p-6" role="alert">
       <div className="flex w-full max-w-lg flex-col gap-4 text-sm">
         <div className="flex flex-col gap-1">
-          <h1 className="text-lg font-semibold text-foreground">OpenWork hit an unexpected error</h1>
+          <h1 className="text-lg font-semibold text-foreground">myai hit an unexpected error</h1>
           <p className="text-muted-foreground">
             The window recovered instead of going blank. Reloading usually clears it.
           </p>

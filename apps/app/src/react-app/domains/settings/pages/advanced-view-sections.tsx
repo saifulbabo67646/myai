@@ -609,7 +609,7 @@ export function AdvancedRuntimeConfigSourcesSection(props: AdvancedRuntimeConfig
         <LayoutSectionItemHeader>
           <LayoutSectionItemTitle>Config source snapshot</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>
-            Shows the OpenWork runtime database, the injected runtime config, and the workspace-owned OpenCode config files.
+            Shows the myai runtime database, the injected runtime config, and the workspace-owned OpenCode config files.
           </LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
             <Button
@@ -753,7 +753,7 @@ export function AdvancedWorkspaceRunModeSection() {
         <LayoutSectionItemHeader>
           <LayoutSectionItemTitle>Show workspace run mode</LayoutSectionItemTitle>
           <LayoutSectionItemDescription>
-            Choose when OpenWork asks before acting, using the icon beside attachments. Off by default. Available with the standard desktop engine.
+            Choose when myai asks before acting, using the icon beside attachments. Off by default. Available with the standard desktop engine.
           </LayoutSectionItemDescription>
           <LayoutSectionItemHeaderActions>
             <Switch

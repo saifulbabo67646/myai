@@ -274,7 +274,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
           <Cloud aria-hidden="true" />
           <AlertTitle>Sign in to Den to use Automations</AlertTitle>
           <AlertDescription>
-            Cloud tasks run even when your desktop is offline. Desktop tasks need OpenWork open and connected.
+            Cloud tasks run even when your desktop is offline. Desktop tasks need myai open and connected.
           </AlertDescription>
         </Alert>
       </div>
@@ -322,7 +322,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
           <div>
             <h2 className="text-xl font-semibold">Create Automation</h2>
             <p className="text-sm text-muted-foreground">
-              {placement === "cloud" ? "Runs on your cloud computer. The schedule starts as soon as you create it." : "Runs on your desktop computer. Keep OpenWork open and connected at the scheduled time."}
+              {placement === "cloud" ? "Runs on your cloud computer. The schedule starts as soon as you create it." : "Runs on your desktop computer. Keep myai open and connected at the scheduled time."}
             </p>
           </div>
         </div>
@@ -557,7 +557,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
             <Card variant="outline">
               <CardHeader>
                 <CardTitle>{detail.revision.executionTarget === "cloud" ? "Cloud computer" : "Desktop computer"}</CardTitle>
-                <CardDescription>{detail.revision.executionTarget === "cloud" ? "Runs on your cloud computer, even when your desktop is offline." : "Runs on your desktop computer. Keep OpenWork open and connected at the scheduled time."}</CardDescription>
+                <CardDescription>{detail.revision.executionTarget === "cloud" ? "Runs on your cloud computer, even when your desktop is offline." : "Runs on your desktop computer. Keep myai open and connected at the scheduled time."}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
                 <div className="min-w-0"><span className="text-muted-foreground">Model</span><p className="break-words">{describeAutomationModel(detail.revision.model, models)}</p></div>
@@ -734,7 +734,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
                 ? "Try a different search."
                 : placement === "cloud"
                   ? "Create a task that runs on your cloud computer, even when your desktop is offline."
-                  : "Create a task for this desktop computer. For tasks that run while it’s offline, create a cloud automation in OpenWork Web."}
+                  : "Create a task for this desktop computer. For tasks that run while it’s offline, create a cloud automation in myai Web."}
             </EmptyDescription>
           </EmptyHeader>
           {!query ? <EmptyContent><Button onClick={() => setSearchParams(new URLSearchParams({ create: "1" }))}><Plus />New Automation</Button></EmptyContent> : null}

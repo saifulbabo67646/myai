@@ -95,7 +95,7 @@ export function ArchitectureMismatchGate({ children }: ArchitectureMismatchGateP
     void window.__OPENWORK_ELECTRON__?.shell?.openExternal?.(info.releaseUrl);
   }, [info?.releaseUrl]);
 
-  if (!checked) return <StartupScreen message="Checking this OpenWork installation" />;
+  if (!checked) return <StartupScreen message="Checking this myai installation" />;
   if (!info?.mismatch) return <>{children}</>;
 
   return (

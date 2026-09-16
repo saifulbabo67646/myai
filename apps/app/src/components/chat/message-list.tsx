@@ -942,7 +942,7 @@ interface ErrorMessageProps {
   /** Error type, status, provider, code, response body — for bug reports and support. */
   technicalDetails?: string | null
   /**
-   * Set (possibly null) only when the OpenWork Gateway rejected the request
+   * Set (possibly null) only when the myai Gateway rejected the request
    * because the member must sign in: a URL opens the grant in the browser,
    * null deep-links to Settings > AI providers instead.
    */
@@ -1154,7 +1154,7 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
               </p>
               <p className="text-xs text-amber-900">
                 {freeModelLimit
-                  ? "OpenWork will keep retrying. To keep working now, connect your own model provider."
+                  ? "myai will keep retrying. To keep working now, connect your own model provider."
                   : action.message}
               </p>
               {freeModelLimit ? (

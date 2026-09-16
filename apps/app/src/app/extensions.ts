@@ -194,7 +194,7 @@ export const BUILT_IN_OPENWORK_EXTENSION_MANIFESTS: OpenWorkExtensionManifest[] 
     icon: { src: "/openwork-mark.svg" },
     composer: { prompt: "Use Computer Use to " },
     setup: {
-      instructions: "Enable Computer Use on macOS 14 or later and grant Accessibility and Screen Recording in the helper. For each session, choose an app window and allow reading, app controls, or mouse and keyboard. Choose Allow and start in OpenWork. Your input interrupts control; Stop in the preview ends access.",
+      instructions: "Enable Computer Use on macOS 14 or later and grant Accessibility and Screen Recording in the helper. For each session, choose an app window and allow reading, app controls, or mouse and keyboard. Choose Allow and start in myai. Your input interrupts control; Stop in the preview ends access.",
       primaryCta: "Enable Computer Use",
       secondaryCta: "Check macOS permissions",
       testActionRef: "openwork.computerUse.healthCheck",
