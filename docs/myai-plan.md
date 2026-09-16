@@ -374,7 +374,7 @@ WP-8 housekeeping/decisions: anytime, owner = human
 | WP-1 | Catch-up sync to upstream | WP-0 | solo (critical path) | ✅ done 2026-09-16 (PR #3, upstream `391d794d2`) |
 | WP-2 | CI curation + guard hardening | WP-1 | A | 🔄 in review (PR: `wp/2-ci-curation`, PR #4) |
 | WP-3 | Endpoint neutralization (Phase 2) | WP-1 | B | 🔄 in review (PR: `wp/3-endpoint-neutralization`) |
-| WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | waiting on WP-1 merge |
+| WP-4 | myai-server MVP (Phase 1) | WP-1 + DEC-1 | C | 🔄 in review (PR #8) |
 | WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | ready (WP-1 merged) |
 | WP-6 | Desktop ↔ server integration | WP-3 + WP-4a | D | waiting |
 | WP-7 | Deployment packaging + docs | WP-4 green | C | waiting |
