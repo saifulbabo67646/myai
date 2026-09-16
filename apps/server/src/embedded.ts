@@ -217,7 +217,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         OPENWORK_SERVER_URL: serverUrl,
         OPENWORK_SERVER_TOKEN: config.token,
         OPENCODE_CONFIG: runtimeConfigPath,
-        OPENCODE_MODELS_URL: opencodeModelsUrl,
+        // Only a configured catalog URL is injected; an empty value would
+        // override the engine's own built-in catalog with nothing.
+        ...(opencodeModelsUrl ? { OPENCODE_MODELS_URL: opencodeModelsUrl } : {}),
       };
       engineSpawnTemplate = {
         bin: opencodeBin,

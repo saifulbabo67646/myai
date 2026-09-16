@@ -26,10 +26,6 @@ const REQUIRED_TOOL_IDS = ["search_capabilities", "execute_capability"] as const
 const BEARER = /^Bearer [A-Za-z0-9\-._~+/]+=*$/;
 const REQUEST_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 const REQUIRED_TERMINAL_PATH = "/mcp/agent";
-const DEFAULT_TRUSTED_ORIGINS = new Set([
-  "https://app.openworklabs.com",
-  "https://api.openworklabs.com",
-]);
 
 export type CloudCatalogProbeStatus = "observed" | "not-performed" | "failed";
 
@@ -139,7 +135,6 @@ export type CloudRuntimeEngineDifferential =
  * misconfiguration — without the report ever carrying a hostname.
  */
 export type CloudEndpointTrustSource =
-  | "builtin-cloud"
   | "loopback"
   | "administrator-env"
   | "enterprise-activation"
@@ -255,13 +250,19 @@ type ProbeBaseFacts = {
   engineEvidenceAgeMs: number | null;
 };
 
-/** Classifies which allowlist entry authorized this exact endpoint origin. */
+/**
+ * Classifies which allowlist entry authorized this exact endpoint origin.
+ *
+ * myai ships no built-in OpenWork Cloud origin: only loopback, an
+ * administrator-configured allowlist, and an activated control-plane origin
+ * authorize a probe, so an unconfigured install never contacts a host nobody
+ * chose.
+ */
 function resolveTrustSource(
   endpoint: URL,
   activatedEnterpriseOrigin?: string | null,
 ): CloudEndpointTrustSource {
   if (isLoopbackHostname(endpoint.hostname)) return "loopback";
-  if (DEFAULT_TRUSTED_ORIGINS.has(endpoint.origin)) return "builtin-cloud";
   if (activatedEnterpriseOrigin && endpoint.origin === activatedEnterpriseOrigin) {
     return "enterprise-activation";
   }
@@ -302,7 +303,7 @@ function isLoopbackHostname(hostname: string): boolean {
  * visible to this server process, so it can never widen this list implicitly.
  */
 function configuredTrustedOrigins(activatedEnterpriseOrigin?: string | null): Set<string> {
-  const origins = new Set(DEFAULT_TRUSTED_ORIGINS);
+  const origins = new Set<string>();
   // The activated enterprise/on-prem control-plane origin is administrator
   // provisioned (written only after a signed activation claim verifies), so
   // it joins the allowlist as an exact origin without an explicit override.
