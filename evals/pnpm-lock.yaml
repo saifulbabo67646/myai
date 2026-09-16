@@ -29,9 +29,6 @@ importers:
       '@openwork/review':
         specifier: link:../packages/review
         version: link:../packages/review
-      '@openwork/sdk':
-        specifier: link:../packages/sdk
-        version: link:../packages/sdk
       '@openwork/test-artifacts':
         specifier: workspace:*
         version: link:packages/test-artifacts

@@ -151,8 +151,12 @@ for (const rel of [
   "apps/app/tests/connector-chat-round-trip.test.ts",
   // Generated Den control-plane API spec, published under the EE License.
   "packages/docs/openapi.json",
-  // SDK generator drives @openwork-ee/den-api; the committed client stays.
-  "packages/sdk/script/generate.mjs",
+  // Den control-plane client: 37k generated lines whose source of truth is the
+  // EE den-api OpenAPI spec (removed just above), hardcoding
+  // https://api.openworklabs.com. Nothing shipped depends on it.
+  "packages/sdk",
+  // Only exercises the generated Den client against a live Den API.
+  "evals/specs/den-sdk.test.ts",
   // Exercises scripts/dev-local.mjs, which this script removes.
   "scripts/dev-local-env.test.mjs",
   // Eval fixtures/worlds that boot the EE gateway or den-db directly.
@@ -207,10 +211,9 @@ function pruneScripts(rel, extraDenyList = []) {
     log(`${rel}: pruned ${removed} script entr(ies)`);
   }
 }
-pruneScripts("package.json", ["dev:web", "dev:web-local", "build:web"]);
+pruneScripts("package.json", ["dev:web", "dev:web-local", "build:web", "sdk:generate", "sdk:check", "sdk:build"]);
 pruneScripts("evals/package.json", ["dev:den"]);
-// The generator invokes @openwork-ee/den-api; the committed client stays usable.
-pruneScripts("packages/sdk/package.json", ["generate", "generate:check"]);
+
 
 // turbo.json: keep only OPENWORK_* global env (the rest is Den/EE-only).
 if (existsSync(join(ROOT, "turbo.json"))) {
@@ -308,6 +311,7 @@ filterLines(
   [/from "@\/app\/lib\/models-task-analytics"/, /^\s*observeModelsTaskEvent\(/],
   "Den task-analytics import and call site",
 );
+filterLines("evals/package.json", [/"@openwork\/sdk":/], "link to the removed Den SDK package");
 filterLines("evals/packages/env/src/index.ts", [/\.\/inference\.ts/], "EE inference fixture re-export");
 
 // Eval worlds that import EE modules at runtime; their specs are removed above.

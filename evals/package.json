@@ -27,7 +27,6 @@
     "@openwork/hosts": "workspace:*",
     "@openwork/labs": "workspace:*",
     "@openwork/matchers": "workspace:*",
-    "@openwork/sdk": "link:../packages/sdk",
     "@openwork/test-artifacts": "workspace:*",
     "@openwork/test-evidence": "workspace:*",
     "@openwork/testkit": "workspace:*",
