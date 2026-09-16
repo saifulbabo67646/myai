@@ -85,6 +85,12 @@ export class EnterpriseMcpOAuthProvider implements OAuthClientProvider {
   private loadedDiscovery: OAuthDiscoveryState | undefined
   private verifiedAuthorizationServerMetadata: AuthorizationServerMetadata | undefined
   private authorizationHandle: EnterpriseMcpOAuthAuthorizationHandle | undefined
+  private pendingAuthorizationCodeCredential: {
+    tokens: StoredOAuthTokens
+    expiresAt?: number
+    authorization: EnterpriseMcpOAuthAuthorizationHandle
+    clientRegistrationRevision?: string
+  } | undefined
   authorizeUrl: string | null = null
 
   constructor(input: {
@@ -373,6 +379,9 @@ export class EnterpriseMcpOAuthProvider implements OAuthClientProvider {
   }
 
   async tokens(context?: OAuthClientInformationContext): Promise<StoredOAuthTokens | undefined> {
+    if (this.pendingAuthorizationCodeCredential) {
+      return this.pendingAuthorizationCodeCredential.tokens
+    }
     const record = await this.persistence.credentials.load(this.context())
     if (!record) {
       this.loadedCredential = undefined
@@ -401,22 +410,56 @@ export class EnterpriseMcpOAuthProvider implements OAuthClientProvider {
 
   async saveTokens(tokens: StoredOAuthTokens, context?: OAuthClientInformationContext): Promise<void> {
     const validated = this.storedTokens(tokens, context)
-    const source = this.authorizationHandle ? "authorization-code" : "refresh"
+    const authorization = this.authorizationHandle
+    const source = authorization ? "authorization-code" : "refresh"
     const existing = source === "refresh"
       ? (this.loadedCredential ?? await this.persistence.credentials.load(this.context()))
       : undefined
-    const merged = source === "refresh" && !validated.refresh_token && existing?.tokens.refresh_token
-      ? { ...validated, refresh_token: existing.tokens.refresh_token }
+    const scoped = source === "refresh" && validated.scope === undefined && existing?.tokens.scope !== undefined
+      ? { ...validated, scope: existing.tokens.scope }
       : validated
+    const merged = source === "refresh" && !scoped.refresh_token && existing?.tokens.refresh_token
+      ? { ...scoped, refresh_token: existing.tokens.refresh_token }
+      : scoped
+    const expiresAt = tokenExpiration(merged, this.clock.now())
+    if (authorization) {
+      this.pendingAuthorizationCodeCredential = {
+        tokens: merged,
+        expiresAt,
+        authorization,
+        clientRegistrationRevision: this.loadedClient?.revision,
+      }
+      this.loadedCredential = undefined
+      return
+    }
     await this.persistence.credentials.save({
       context: this.context(),
       tokens: merged,
-      expiresAt: tokenExpiration(merged, this.clock.now()),
-      source,
-      authorization: this.authorizationHandle,
+      expiresAt,
+      source: "refresh",
       clientRegistrationRevision: this.loadedClient?.revision,
-      expectedCredentialRevision: source === "refresh" ? existing?.revision : undefined,
+      expectedCredentialRevision: existing?.revision,
     })
+    this.loadedCredential = undefined
+  }
+
+  async commitPendingAuthorizationCodeCredential(): Promise<void> {
+    const pending = this.pendingAuthorizationCodeCredential
+    if (!pending) {
+      throw new EnterpriseMcpOAuthContractError(
+        "MCP_OAUTH_PERSISTENCE_INVALID",
+        "The OAuth callback completed without a pending credential.",
+      )
+    }
+    await this.persistence.credentials.save({
+      context: this.context(),
+      tokens: pending.tokens,
+      expiresAt: pending.expiresAt,
+      source: "authorization-code",
+      authorization: pending.authorization,
+      clientRegistrationRevision: pending.clientRegistrationRevision,
+    })
+    this.pendingAuthorizationCodeCredential = undefined
     this.loadedCredential = undefined
   }
 
@@ -484,13 +527,22 @@ export class EnterpriseMcpOAuthProvider implements OAuthClientProvider {
   }
 
   async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
+    // Persistence may refuse to discard an administrator-supplied client. The
+    // rejected credentials are still cleared, then the refusal is surfaced so
+    // the SDK neither retries the exchange nor registers a replacement client.
+    let retainedClient: EnterpriseMcpOAuthContractError | undefined
     if (scope === "all" || scope === "client") {
-      await this.persistence.clientRegistrations.invalidate({
-        context: this.context(),
-        reason: "provider-rejected",
-      })
+      try {
+        await this.persistence.clientRegistrations.invalidate({
+          context: this.context(),
+          reason: "provider-rejected",
+        })
+      } catch (error) {
+        if (!(error instanceof EnterpriseMcpOAuthContractError) || error.code !== "MCP_OAUTH_CLIENT_REJECTED") throw error
+        retainedClient = error
+      }
     }
-    if (scope === "all" || scope === "tokens") {
+    if (scope === "all" || scope === "tokens" || retainedClient) {
       await this.persistence.credentials.invalidate({
         context: this.context(),
         reason: "provider-rejected",
@@ -512,5 +564,6 @@ export class EnterpriseMcpOAuthProvider implements OAuthClientProvider {
         reason: "provider-rejected",
       })
     }
+    if (retainedClient) throw retainedClient
   }
 }

@@ -21,13 +21,9 @@ import {
 import type { LibraryAddKind } from "../library";
 
 const PICKER_KIND_ORDER: LibraryAddKind[] = [
-  "skill",
-  "command",
-  "agent",
-  "plugin",
   "mcp",
-  "workspace-mcp",
-  "connection",
+  "skill",
+  "plugin",
 ];
 
 type KindMeta = {
@@ -66,7 +62,7 @@ function kindMeta(kind: LibraryAddKind): KindMeta {
     case "mcp":
       return {
         title: t("extensions.kind_mcp"),
-        description: t("extensions.kind_mcp_hint"),
+        description: t("extensions.empty_mcp_hint"),
         icon: Server,
       };
     case "workspace-mcp":
@@ -132,7 +128,7 @@ function KindOptionRow(props: {
         <span className="mt-0.5 block text-[13px] leading-[18px] text-dls-secondary">
           {meta.description}
         </span>
-        {props.kind === "connection" && props.connectorCues.length > 0 ? (
+        {props.kind === "mcp" && props.connectorCues.length > 0 ? (
           <span
             className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5"
             data-testid="connection-logo-cues"
@@ -188,17 +184,16 @@ export function LibraryAddKindPicker(props: {
   onClose: () => void;
   onSelect: (kind: LibraryAddKind) => void;
 }) {
-  const firstKind = props.kinds[0];
+  const orderedKinds = PICKER_KIND_ORDER.filter((kind) => props.kinds.includes(kind));
+  const firstKind = orderedKinds[0];
   const [selected, setSelected] = useState<LibraryAddKind | null>(firstKind ?? null);
 
   useEffect(() => {
     if (!props.open) return;
     setSelected((current) => (
-      current && props.kinds.includes(current) ? current : props.kinds[0] ?? null
+      current && PICKER_KIND_ORDER.includes(current) && props.kinds.includes(current) ? current : firstKind ?? null
     ));
-  }, [props.open, props.kinds]);
-
-  const orderedKinds = PICKER_KIND_ORDER.filter((kind) => props.kinds.includes(kind));
+  }, [props.open, props.kinds, firstKind]);
 
   const handleContinue = () => {
     if (!selected) return;

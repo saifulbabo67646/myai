@@ -1,6 +1,8 @@
 // Concurrency and degraded-state policy for the session route's
 // refreshRouteState. Extracted as pure helpers so the desktop restart
 // recovery contract is unit-testable without rendering the route.
+import type { ResolvedWorkspaceEndpoint } from "@/app/lib/workspace-endpoint";
+import type { RouteWorkspace } from "./route-workspaces";
 
 export type RouteRefreshAttempt = {
   readonly generation: number;
@@ -27,6 +29,16 @@ export type RouteRefreshLifecycle = {
    */
   begin(options?: { supersede?: boolean }): RouteRefreshAttempt | null;
   isInFlight(): boolean;
+};
+
+export type RouteWorkspaceLoadCoalescer = {
+  /**
+   * Share a workspace's active chain only within the same engine/endpoint.
+   * A changed scope starts immediately and makes the old chain stale.
+   */
+  run(workspaceId: string, scope: string, load: (isCurrent: () => boolean) => Promise<void>): Promise<void>;
+  isInFlight(workspaceId: string): boolean;
+  invalidate(workspaceId: string): void;
 };
 
 export type LatestWorkspaceCommitter = {
@@ -138,13 +150,80 @@ export async function commitRouteWorkspaceSelection(input: {
   await input.activateWorkspace(workspaceId);
 }
 
+export async function mapRouteWorkspaceLoads<T, R>(
+  workspaces: readonly T[],
+  load: (workspace: T) => Promise<R>,
+): Promise<R[]> {
+  const batchSize = 4;
+  const results: R[] = [];
+  for (let offset = 0; offset < workspaces.length; offset += batchSize) {
+    results.push(...await Promise.all(workspaces.slice(offset, offset + batchSize).map(load)));
+  }
+  return results;
+}
+
+/**
+ * Coalesce the complete session-list load chain for each workspace.
+ *
+ * Cold OpenCode reads can legitimately outlive a fixed staleness threshold.
+ * Keeping ownership until the promise settles prevents route, settings, and
+ * visibility refreshes from starting overlapping retries for the same
+ * workspace while still allowing different workspaces to load concurrently.
+ * Changed engines/endpoints must not wait for an obsolete, possibly hung read.
+ */
+export function createRouteWorkspaceLoadCoalescer(): RouteWorkspaceLoadCoalescer {
+  const current = new Map<string, { scope: string; promise: Promise<void> | null }>();
+
+  return {
+    run(workspaceId, scope, load) {
+      const existing = current.get(workspaceId);
+      if (existing?.scope === scope && existing.promise) return existing.promise;
+
+      const entry: { scope: string; promise: Promise<void> | null } = { scope, promise: null };
+      const isCurrent = () => current.get(workspaceId) === entry;
+      const request = Promise.resolve().then(() => {
+        if (isCurrent()) return load(isCurrent);
+      });
+      const tracked = request.finally(() => {
+        entry.promise = null;
+      });
+      entry.promise = tracked;
+      current.set(workspaceId, entry);
+      return tracked;
+    },
+    isInFlight: (workspaceId) => Boolean(current.get(workspaceId)?.promise),
+    invalidate: (workspaceId) => { current.delete(workspaceId); },
+  };
+}
+
+/** Unknown local routing is not v1. Remote inventories retain their native transport. */
+export function routeWorkspaceSessionLoadScope(
+  workspace: RouteWorkspace,
+  endpoint: ResolvedWorkspaceEndpoint | null,
+  engineV2ChatRouting: boolean | undefined,
+): string | null {
+  const remote = workspace.workspaceType === "remote";
+  if (!remote && (!endpoint || engineV2ChatRouting === undefined)) return null;
+  return JSON.stringify([
+    workspace.workspaceType,
+    workspace.remoteType,
+    workspace.path,
+    endpoint?.baseUrl,
+    endpoint?.workspaceId,
+    endpoint?.mountedBaseUrl,
+    endpoint?.opencodeBaseUrl,
+    endpoint?.token,
+    remote ? false : engineV2ChatRouting,
+  ]);
+}
+
 /**
  * Every workspace with an unloaded session index gets a background load, with
  * the routed workspace first so the visible pane fills fastest. Loading only
  * the routed workspace left every other workspace's sidebar showing the
  * "No tasks yet." empty state on launch even when it had sessions, because
  * nothing else ever fetched their session lists. Session-list loads are
- * read-only `listSessions` calls, so this does not interact with the
+ * read-only native `session.list` calls, so this does not interact with the
  * workspace-activation serialization from the switching-coherence fix.
  */
 export function planRouteWorkspaceLoads(

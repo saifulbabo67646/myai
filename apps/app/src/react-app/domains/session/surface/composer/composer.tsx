@@ -2,12 +2,13 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Agent } from "@opencode-ai/sdk/v2/client";
-import { AppWindowMac, ArrowUp, Check, ChevronDown, ChevronRight, FileText, LoaderCircle, Paperclip, Plus, RefreshCw, Settings, Square, Terminal, X, Zap } from "lucide-react";
+import { AppWindowMac, Cloud, Monitor, ArrowUp, Check, ChevronDown, ChevronRight, FileText, LoaderCircle, Paperclip, Plus, RefreshCw, Settings, Square, Terminal, X, Zap } from "lucide-react";
 import fuzzysort from "fuzzysort";
 import { toast } from "@/components/ui/sonner";
 import type { CloudImportedPlugin, CloudImportedPluginFile } from "@/app/cloud/import-state";
 import type { ComposerAttachment, McpServerEntry, McpStatus, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
 import { t } from "@/i18n";
+import { useComposerStateStore } from "../composer-state-store";
 import {
   composerConfigureSectionForMenu,
   isLibraryCommand,
@@ -15,8 +16,10 @@ import {
   type ComposerSettingsSection,
 } from "@/react-app/domains/settings/library";
 import { ModelSelect } from "@/components/model-select";
-import { LexicalPromptEditor, syncAttachmentChipStatus, type LexicalPromptEditorHandle } from "./editor";
+import { ImageLightbox } from "@/components/chat/image-lightbox";
+import { LexicalPromptEditor, syncAttachmentChipStatus, type ComposerAttachmentToken, type LexicalPromptEditorHandle } from "./editor";
 import { listRunningAppsForMention } from "./app-mentions";
+import { COMPUTER_MENTIONS } from "./computer-mentions";
 import type { ComposerMentionKind } from "./mention-encoding";
 import {
   connectSkillSlashCommandOptions,
@@ -40,6 +43,7 @@ type MentionItem = {
   kind: ComposerMentionKind;
   value: string;
   label: string;
+  description?: string;
 };
 
 type ToolMenuSection = "agents" | "commands" | "skills" | "connections" | "plugins" | `plugin:${string}`;
@@ -53,8 +57,10 @@ type ComposerProps = {
   onQueue: () => void | Promise<void>;
   onStop: () => void | Promise<void>;
   busy: boolean;
+  stopping?: boolean;
   steering: boolean;
   submissionPreparing: boolean;
+  submissionPreparingLabel?: string;
   queuedCount: number;
   disabled: boolean;
   modelUnavailable?: boolean;
@@ -98,7 +104,7 @@ type ComposerProps = {
   onOpenSettingsSection?: (section: ComposerSettingsSection) => void;
   recentFiles: string[];
   searchFiles: (query: string) => Promise<string[]>;
-  onInsertMention: (kind: ComposerMentionKind, value: string) => void;
+  onInsertMention: (kind: ComposerMentionKind, value: string, draft?: string) => void;
   /** Sent-prompt history (oldest first) recalled with ArrowUp/ArrowDown (#2012). */
   inputHistory?: string[];
   onPasteText: (text: string) => void;
@@ -114,6 +120,7 @@ type ComposerProps = {
   /** Render inline in a page (new-task hero): no sticky dock chrome or inner max-width, aligning with sibling content. */
   flush?: boolean;
   topAccessory?: ReactNode;
+  runModeControl?: ReactNode;
 };
 
 const FLUSH_PROMPT_EVENT = "openwork:flushPromptDraft";
@@ -241,6 +248,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   const [toolMenuLayout, setToolMenuLayout] = useState<ToolMenuLayout | null>(null);
   const [toolMenuSection, setToolMenuSection] = useState<ToolMenuSection>("commands");
   const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
+  const [activeMentionQuery, setActiveMentionQuery] = useState<string | null>(null);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
   const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -359,9 +367,8 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   const slashCommandQuery = getSlashCommandQuery(props.draft);
   const slashOpenNext = slashCommandQuery !== null;
   const slashQuery = slashCommandQuery ?? "";
-  const mentionMatch = props.draft.match(/@([^\s@]*)$/);
-  const mentionOpenNext = Boolean(mentionMatch);
-  const mentionQuery = mentionMatch?.[1] ?? "";
+  const mentionOpenNext = activeMentionQuery !== null;
+  const mentionQuery = activeMentionQuery ?? "";
   const nonDefaultAgents = useMemo(() => agents.filter(isNonDefaultAgent), [agents]);
   const showAgentPicker = props.selectedAgent !== null;
 
@@ -523,10 +530,16 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
   useEffect(() => {
     if (!mentionOpen) return;
     let cancelled = false;
-    void Promise.all([props.listAgents(), props.searchFiles(mentionQuery), listRunningAppsForMention()]).then(([agentList, files, apps]) => {
+    setMentionItems(COMPUTER_MENTIONS);
+    void Promise.all([
+      props.listAgents().catch(() => []),
+      props.searchFiles(mentionQuery).catch(() => []),
+      listRunningAppsForMention(),
+    ]).then(([agentList, files, apps]) => {
       if (cancelled) return;
       const recent = props.recentFiles.slice(0, 8);
       const next: MentionItem[] = [
+        ...COMPUTER_MENTIONS,
         ...agentList.map((agent) => ({ id: `agent:${agent.name}`, kind: "agent" as const, value: agent.name, label: agent.name })),
         ...recent.map((file) => ({ id: `file:${file}`, kind: "file" as const, value: file, label: file })),
         // Running macOS apps (Computer Use targets). Listed after recent files
@@ -537,7 +550,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       ];
       setMentionItems(next);
     }).catch(() => {
-      if (!cancelled) setMentionItems([]);
+      if (!cancelled) setMentionItems(COMPUTER_MENTIONS);
     });
     return () => {
       cancelled = true;
@@ -720,12 +733,26 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     () => props.pastedText.map((item) => ({ label: item.label, lines: item.lines, text: item.text })),
     [props.pastedText],
   );
+  // Stable tokens keep streaming renders from re-running Lexical's draft sync.
+  const attachmentTokens = useMemo<ComposerAttachmentToken[]>(
+    () => props.attachments.map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      kind: isImageAttachment(attachment) ? "image" : "file",
+      previewUrl: attachment.previewUrl,
+    })),
+    [props.attachments],
+  );
 
   const handleExpandPastedText = useCallback((label: string) => {
     const target = props.pastedText.find((item) => item.label === label);
     if (!target) return;
     props.onExpandPastedText(target.id);
   }, [props.onExpandPastedText, props.pastedText]);
+
+  // Draft image chip clicked: show it full-size so it can be inspected before sending.
+  const [expandedAttachmentId, setExpandedAttachmentId] = useState<string | null>(null);
+  const expandedAttachment = props.attachments.find((attachment) => attachment.id === expandedAttachmentId);
 
   const activeMenu = slashOpen ? "slash" : mentionOpen ? "mention" : null;
   const activeItems = activeMenu === "slash" ? slashFiltered : activeMenu === "mention" ? mentionFiltered : [];
@@ -937,6 +964,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     props.onOpenSettingsSection?.(composerConfigureSectionForMenu(toolMenuSection));
   };
 
+  const applyMentionSelection = (item: MentionItem) => {
+    const draft = editorRef.current?.insertMentionAtSelection(item.kind, item.value);
+    if (draft == null) return false;
+    props.onInsertMention(item.kind, item.value, draft);
+    setMentionOpen(false);
+    return true;
+  };
+
   const acceptActiveItem = () => {
     if (!activeItems.length) return false;
     if (activeMenu === "slash") {
@@ -948,12 +983,27 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     if (activeMenu === "mention") {
       const item = mentionFiltered[menuIndex];
       if (!item) return false;
-      props.onInsertMention(item.kind, item.value);
-      setMentionOpen(false);
-      return true;
+      return applyMentionSelection(item);
     }
     return false;
   };
+
+  const focusRequested = useComposerStateStore((state) => (
+    Boolean(props.sessionId) && state.pendingFocusSessionId === props.sessionId
+  ));
+  useEffect(() => {
+    if (!focusRequested || props.disabled) return;
+    // Wait for the editor to mount and the creating menu to close. Keep the
+    // request until this session is ready, even when its snapshot loads slowly.
+    const frame = requestAnimationFrame(() => {
+      if (useComposerStateStore.getState().pendingFocusSessionId !== props.sessionId) return;
+      const editable = rootRef.current?.querySelector<HTMLElement>("[contenteditable='true']");
+      if (!editable) return;
+      editable.focus();
+      useComposerStateStore.setState({ pendingFocusSessionId: null });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequested, props.disabled, props.sessionId]);
 
   // Listen for cross-app focus + draft flush events. The Solid shell uses
   // these from deep-link handlers, the command palette, and the browser
@@ -996,9 +1046,10 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
     // Escape-to-stop while the agent is busy. Only when no menu is open so
     // Escape can still close menus. First press arms a confirmation prompt
     // for 3s; a second Escape within that window stops the agent.
-    const anyMenuOpen = agentMenuOpen || toolMenuOpen || Boolean(activeMenu);
+    const anyMenuOpen = agentMenuOpen || toolMenuOpen || props.modelPickerOpen || Boolean(activeMenu);
     if (event.key === "Escape" && props.busy && !anyMenuOpen) {
       event.preventDefault();
+      if (props.stopping) return;
       if (escapeArmed) {
         disarmEscape();
         void props.onStop();
@@ -1211,11 +1262,12 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                   className={`flex w-full items-start gap-3 rounded-[16px] px-3 py-2.5 text-left transition-colors hover:bg-gray-2/70 ${activeMenu === "mention" && mentionFiltered[menuIndex]?.id === item.id ? "bg-gray-3 text-gray-12" : "text-gray-11"}`}
                   onMouseEnter={() => setMenuIndex(index)}
                   onClick={() => {
-                    props.onInsertMention(item.kind, item.value);
-                    setMentionOpen(false);
+                    applyMentionSelection(item);
                   }}
                 >
-                  {item.kind === "agent" ? (
+                  {item.kind === "computer" ? (
+                    item.value === "cloud" ? <Cloud size={14} className="mt-0.5 shrink-0 text-gray-9" /> : <Monitor size={14} className="mt-0.5 shrink-0 text-gray-9" />
+                  ) : item.kind === "agent" ? (
                     <Zap size={14} className="mt-0.5 shrink-0 text-gray-9" />
                   ) : item.kind === "app" ? (
                     <AppWindowMac size={14} className="mt-0.5 shrink-0 text-gray-9" />
@@ -1225,7 +1277,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                   <div className="min-w-0">
                     <div className="truncate text-xs font-semibold">@{item.label}</div>
                     <div className="truncate text-xs text-gray-10">
-                      {item.kind === "agent"
+                      {item.description ? item.description : item.kind === "agent"
                         ? t("composer.agent_label")
                         : item.kind === "app"
                           ? t("composer.app_kind")
@@ -1258,7 +1310,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
       <div className={props.flush ? "" : "max-w-[800px] mx-auto"}>
         {/* Main composer panel */}
         <div
-          className={`relative overflow-visible rounded-[18px] border border-dls-border bg-dls-surface transition-all ${panelRoundedClass}`}
+          className={`@container/composer relative overflow-visible rounded-[18px] border border-dls-border bg-dls-surface transition-all ${panelRoundedClass}`}
         >
           {props.topAccessory ? <div className="relative z-10">{props.topAccessory}</div> : null}
 
@@ -1289,17 +1341,14 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
               value={props.draft}
               mentions={props.mentions}
               pastedText={pastedTextTokens}
-              attachments={props.attachments.map((attachment) => ({
-                id: attachment.id,
-                name: attachment.name,
-                kind: isImageAttachment(attachment) ? "image" : "file",
-                previewUrl: attachment.previewUrl,
-              }))}
-              disabled={props.disabled}
+              attachments={attachmentTokens}
+              submitDisabled={props.disabled}
               placeholder={t("composer.placeholder")}
               onChange={props.onDraftChange}
+              onMentionQueryChange={setActiveMentionQuery}
               onSubmit={handleEditorSubmit}
               onExpandPastedText={handleExpandPastedText}
+              onExpandAttachment={setExpandedAttachmentId}
               onRemoveAttachment={props.onRemoveAttachment}
               onPasteText={props.onPasteText}
               onPaste={(event) => {
@@ -1376,9 +1425,15 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
               }}
             />
 
-            {/* Action row — tools, attachments, model, and send stay on one line */}
-            <div className="mt-2 flex items-center gap-1.5">
-              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {/* Respond to the pane width, including desktop split views. */}
+            {props.busy && !props.stopping && escapeArmed ? (
+              <div data-composer-stop-confirmation role="status" className="mt-2 text-[12px] font-medium text-gray-10">
+                {t("composer.escape_to_stop")}
+              </div>
+            ) : null}
+            <div data-composer-toolbar className="mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-2 @min-[560px]/composer:flex">
+              <div className="contents">
+                <div className="col-start-1 row-start-2 flex shrink-0 items-center gap-1.5">
                 <input
                   ref={(element) => {
                     fileInput = element ?? undefined;
@@ -1412,6 +1467,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                     aria-expanded={toolMenuOpen}
                     aria-haspopup="dialog"
                     title={t("composer.tools_label")}
+                    aria-label={t("composer.tools_label")}
                   >
                     <Plus size={16} />
                   </button>
@@ -1625,6 +1681,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                     document.body,
                   ) : null}
                 </div>
+                {props.runModeControl}
                 <button
                   type="button"
                   className={`inline-flex h-9 max-h-9 w-9 shrink-0 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 ${
@@ -1640,15 +1697,18 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                   <Paperclip size={16} />
                 </button>
 
+                </div>
+
+                <div data-composer-settings className="col-span-2 row-start-1 flex min-w-0 flex-wrap items-center gap-1 border-b border-dls-border pb-2 @min-[560px]/composer:flex-1 @min-[560px]/composer:border-0 @min-[560px]/composer:pb-0">
                 {/* Agent picker (#2101/#1971). Only shown once a non-default
                     agent is selected. Switching back to Default agent lives in
-                    this menu and in the + tools menu. */}
-                <div ref={agentMenuRef} className={showAgentPicker ? "relative" : "hidden"}>
+                    this menu and in the + tools menu. Selection configures
+                    subsequent submissions without interrupting the running turn. */}
+                <div ref={agentMenuRef} className={showAgentPicker ? "relative min-w-0 max-w-full shrink-0" : "hidden"}>
                   <button
                     type="button"
-                    className="flex h-9 max-h-9 items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
+                    className="flex h-9 max-h-9 max-w-full items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
                     onClick={() => setAgentMenuOpen((value) => !value)}
-                    disabled={props.busy}
                     aria-expanded={agentMenuOpen}
                     title={t("composer.agent_label")}
                   >
@@ -1743,10 +1803,11 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                     </span>
                   </button>
                 ) : (
-                  <span className="max-w-[20rem] truncate text-xs font-medium text-red-10">
+                  <span className="min-w-0 max-w-full truncate text-xs font-medium text-red-10">
                     {props.modelUnavailableMessage ?? t("models.model_unavailable_short")}
                   </span>
                 ) : null}
+                </div>
 
               </div>
 
@@ -1756,12 +1817,7 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                 - Busy: stop icon in that same slot (Enter still queues;
                   Cmd/Ctrl+Enter still steers).
               */}
-              <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                {props.busy && escapeArmed ? (
-                  <span className="self-center pr-1 text-[12px] font-medium text-gray-10 max-lg:hidden">
-                    {t("composer.escape_to_stop")}
-                  </span>
-                ) : null}
+              <div data-composer-actions className="col-start-2 row-start-2 ml-auto flex shrink-0 items-center gap-1.5">
                 <button
                   type="button"
                   onClick={
@@ -1773,31 +1829,41 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                   }
                   disabled={
                     props.disabled
+                    || props.stopping
                     || (!props.busy && (!canSend || props.submissionPreparing))
                   }
                   aria-label={
-                    props.busy
-                      ? t("composer.stop")
-                      : props.submissionPreparing
-                        ? "Preparing connected service tools…"
-                        : t("composer.run_task")
+                    props.stopping
+                      ? t("composer.stopping")
+                      : props.busy
+                        ? t("composer.stop")
+                        : props.submissionPreparing
+                          ? props.submissionPreparingLabel ?? "Preparing connected service tools…"
+                          : t("composer.run_task")
                   }
+                  aria-busy={props.stopping || props.submissionPreparing || undefined}
                   className={`inline-flex h-9 max-h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
-                    props.busy
-                      ? "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"
-                      : !canSend || props.disabled || props.submissionPreparing
-                        ? "bg-gray-4 text-gray-10"
-                        : "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"
+                    props.stopping
+                      ? "cursor-wait bg-[var(--dls-accent)] text-[var(--dls-accent-fg)]"
+                      : props.busy
+                        ? "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"
+                        : !canSend || props.disabled || props.submissionPreparing
+                          ? "bg-gray-4 text-gray-10"
+                          : "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"
                   }`}
                   title={
-                    props.busy
-                      ? t("composer.stop")
-                      : props.submissionPreparing
-                        ? "Preparing connected service tools…"
-                        : t("composer.run_task")
+                    props.stopping
+                      ? t("composer.stopping")
+                      : props.busy
+                        ? t("composer.stop")
+                        : props.submissionPreparing
+                          ? props.submissionPreparingLabel ?? "Preparing connected service tools…"
+                          : t("composer.run_task")
                   }
                 >
-                  {props.busy ? (
+                  {props.stopping ? (
+                    <LoaderCircle size={15} className="animate-spin" />
+                  ) : props.busy ? (
                     <Square size={12} fill="currentColor" />
                   ) : props.submissionPreparing ? (
                     <LoaderCircle size={15} className="animate-spin" />
@@ -1805,11 +1871,13 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
                     <ArrowUp size={15} />
                   )}
                   <span className="sr-only">
-                    {props.busy
-                      ? t("composer.stop")
-                      : props.submissionPreparing
-                        ? "Preparing connected service tools…"
-                        : t("composer.run_task")}
+                    {props.stopping
+                      ? t("composer.stopping")
+                      : props.busy
+                        ? t("composer.stop")
+                        : props.submissionPreparing
+                          ? props.submissionPreparingLabel ?? "Preparing connected service tools…"
+                          : t("composer.run_task")}
                   </span>
                 </button>
               </div>
@@ -1819,6 +1887,17 @@ export const ReactSessionComposer = memo(function ReactSessionComposer(props: Co
 
       </div>
     </div>
+    {/* Sibling of the composer root so Escape closes the lightbox without arming stop. */}
+    {expandedAttachment?.previewUrl ? (
+      <ImageLightbox
+        src={expandedAttachment.previewUrl}
+        alt={expandedAttachment.name}
+        open
+        onOpenChange={(open) => {
+          if (!open) setExpandedAttachmentId(null);
+        }}
+      />
+    ) : null}
     </DevProfiler>
   );
 });

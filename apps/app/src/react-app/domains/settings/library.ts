@@ -190,7 +190,7 @@ const LIBRARY_ITEM_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export function libraryAddKindsForFilter(filter: string): LibraryAddKind[] {
   switch (filter) {
     case "all":
-      return [...LIBRARY_ADD_KINDS];
+      return ["mcp", "skill", "plugin"];
     case "skill":
       return ["skill"];
     case "command":
@@ -198,7 +198,7 @@ export function libraryAddKindsForFilter(filter: string): LibraryAddKind[] {
     case "agent":
       return ["agent"];
     case "mcp":
-      return ["mcp", "workspace-mcp"];
+      return ["mcp"];
     case "plugin":
       return ["plugin"];
     case "connection":
@@ -213,7 +213,7 @@ export function isLibraryAuthorableKind(kind: LibraryAddKind): kind is LibraryAu
 }
 
 export type LibraryAddAction =
-  | { type: "den-url"; kind: "connection" }
+  | { type: "den-url"; kind: "connection" | "mcp" }
   | { type: "den-modal"; kind: LibraryAuthorableKind }
   | { type: "workspace-mcp" };
 
@@ -223,24 +223,55 @@ export function libraryAddAction(
   options: {
     cloudSignedIn: boolean;
     allowManageExtensions: boolean;
+    canManageCloudConnections?: boolean;
   },
 ): LibraryAddAction | null {
   if (addKind === "workspace-mcp") {
     return options.allowManageExtensions ? { type: "workspace-mcp" } : null;
   }
   if (!options.cloudSignedIn) return null;
-  if (addKind === "connection") return { type: "den-url", kind: "connection" };
+  if (addKind === "connection" || addKind === "mcp") {
+    // Members browse their granted connections; only admins enter connector setup.
+    return { type: "den-url", kind: options.canManageCloudConnections === true ? "connection" : "mcp" };
+  }
   if (isLibraryAuthorableKind(addKind)) return { type: "den-modal", kind: addKind };
   return null;
 }
 
 export type LibraryPluginComponentKind = "skill" | "command" | "agent" | "mcp";
 
+export type LibraryMcpAuthType = "oauth" | "apikey" | "none";
+export type LibraryMcpCredentialMode = "per_member" | "shared";
+
+/**
+ * Connector setup captured while an MCP server is added to a plugin: the same
+ * authentication questions Den's Connectors form asks. Owners and admins only;
+ * Den refuses it from other members.
+ */
+export type LibraryMcpConnectionForm = {
+  authType: LibraryMcpAuthType;
+  credentialMode: LibraryMcpCredentialMode;
+  apiKey: string;
+  useOAuthClient: boolean;
+  oauthClientId: string;
+  oauthClientSecret: string;
+};
+
+/** The `connection` body Den accepts on an mcp component of `POST /v1/plugins`. */
+export type LibraryMcpConnectionRequest = {
+  authType: LibraryMcpAuthType;
+  credentialMode: LibraryMcpCredentialMode;
+  apiKey?: string;
+  oauthClient?: { clientId: string; clientSecret?: string };
+};
+
 export type LibraryPluginComponentDraft = {
   kind: LibraryPluginComponentKind;
   name: string;
   description: string;
   content: string;
+  /** MCP components only. */
+  connection?: LibraryMcpConnectionForm;
 };
 
 export type CreateLibraryItemInput = {
@@ -250,6 +281,8 @@ export type CreateLibraryItemInput = {
   orgWide?: boolean;
   marketplaceId?: string;
   components?: LibraryPluginComponentDraft[];
+  /** Connector setup for the `mcp` kind. */
+  connection?: LibraryMcpConnectionForm;
 };
 
 export type DenLibraryPluginCreateRequest = {
@@ -264,8 +297,46 @@ export type DenLibraryPluginCreateRequest = {
       normalizedPayloadJson?: Record<string, unknown>;
       metadata: { name: string; description?: string };
     };
+    connection?: LibraryMcpConnectionRequest;
   }>;
 };
+
+export function emptyLibraryMcpConnectionForm(): LibraryMcpConnectionForm {
+  return {
+    authType: "oauth",
+    credentialMode: "per_member",
+    apiKey: "",
+    useOAuthClient: false,
+    oauthClientId: "",
+    oauthClientSecret: "",
+  };
+}
+
+/** Switching away from OAuth drops the OAuth-only answers, as the Connectors form does. */
+export function withLibraryMcpAuthType(form: LibraryMcpConnectionForm, authType: LibraryMcpAuthType): LibraryMcpConnectionForm {
+  return authType === "oauth"
+    ? { ...form, authType }
+    : { ...form, authType, useOAuthClient: false, oauthClientId: "", oauthClientSecret: "" };
+}
+
+export function libraryMcpConnectionFormIncomplete(form: LibraryMcpConnectionForm): boolean {
+  return form.authType === "apikey" && !form.apiKey.trim();
+}
+
+/** Sends only the answers that apply to the chosen authentication. */
+export function libraryMcpConnectionRequest(form: LibraryMcpConnectionForm): LibraryMcpConnectionRequest {
+  const apiKey = form.apiKey.trim();
+  const clientId = form.oauthClientId.trim();
+  const clientSecret = form.oauthClientSecret.trim();
+  return {
+    authType: form.authType,
+    credentialMode: form.authType === "oauth" ? form.credentialMode : "shared",
+    ...(form.authType === "apikey" && apiKey ? { apiKey } : {}),
+    ...(form.authType === "oauth" && form.useOAuthClient && clientId
+      ? { oauthClient: { clientId, ...(clientSecret ? { clientSecret } : {}) } }
+      : {}),
+  };
+}
 
 function skillMarkdown(name: string, description: string, instructions: string) {
   return [
@@ -296,6 +367,7 @@ export function denLibraryPluginComponentBody(component: LibraryPluginComponentD
           ...(description ? { description } : {}),
         },
       },
+      ...(component.connection ? { connection: libraryMcpConnectionRequest(component.connection) } : {}),
     };
   }
   return {
@@ -317,13 +389,14 @@ export function denLibraryPluginCreateRequest(
   kind: LibraryAuthorableKind,
   input: CreateLibraryItemInput,
 ): DenLibraryPluginCreateRequest {
-  const drafts = input.components && input.components.length > 0
+  const drafts: LibraryPluginComponentDraft[] = input.components && input.components.length > 0
     ? input.components
     : [{
       kind: kind === "plugin" ? "skill" : kind,
       name: input.name,
       description: input.description,
       content: input.instructions,
+      ...(kind === "mcp" && input.connection ? { connection: input.connection } : {}),
     }];
   return {
     name: input.name.trim(),

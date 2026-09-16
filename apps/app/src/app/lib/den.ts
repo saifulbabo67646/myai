@@ -15,8 +15,10 @@ import type {
   AutomationRunReceipt,
   AutomationRunnerTokenResponse,
   CreateAutomation,
+  CreateCloudAutomation,
   UpdateAutomation,
 } from "@openwork/types/automations";
+import { generatedArtifactViewSchema, savedAppDetailSchema, savedAppSummarySchema, type SaveApp, type WorkflowDetail } from "@openwork/types/workflows";
 
 // Re-export the shared schema under the local alias so React consumers
 // (e.g. the cloud domain's desktop-config provider) can import it alongside
@@ -34,10 +36,12 @@ import {
   desktopFetch,
   desktopFetchViaMain,
   getDesktopBootstrapConfig as getDesktopBootstrapConfigFromShell,
+  readDesktopDistributionInfo,
   readInitialDesktopBootstrapConfig,
   setDesktopBootstrapConfig as setDesktopBootstrapConfigInShell,
   type DesktopBootstrapConfig as ShellDesktopBootstrapConfig,
 } from "./desktop";
+import { enterpriseActivationRequired } from "./enterprise-activation";
 import { getOpenworkGatewayOrigin } from "./gateway-runtime";
 import { clearDesktopSignInIntent, clearOrgSelectionPending } from "./den-sign-in-intent";
 import { clearDashboardTileCacheStorage } from "./dashboard-cache-storage";
@@ -97,9 +101,12 @@ const BUILD_DEN_REQUIRE_SIGNIN =
  * Read dynamically so tests can vary it; Vite inlines the env in real builds.
  */
 function readBuildDenApiBaseUrl(): string {
-  return (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_API_BASE_URL === "string"
+  const apiBaseUrl = (typeof import.meta !== "undefined" && typeof import.meta.env?.VITE_DEN_API_BASE_URL === "string"
     ? import.meta.env.VITE_DEN_API_BASE_URL
     : "").trim();
+  return apiBaseUrl === "/api/den" && typeof window !== "undefined"
+    ? new URL(apiBaseUrl, window.location.origin).href
+    : apiBaseUrl;
 }
 
 function readForceEnvDenSettings(): boolean {
@@ -279,30 +286,19 @@ export type DenCloudInstance = {
   imageVersion: string | null;
   instanceName?: string | null;
   latestVersion: string | null;
+  failure?: DenCloudStartupFailure;
+};
+
+export type DenCloudStartupFailure = {
+  code: string;
+  stage: "provisioning" | "recovery" | "runtime";
+  reference: string;
+  occurredAt: string;
 };
 
 export type DenCloudInstanceUpdateResult =
   | { ok: true; status: "update_requested" }
   | { ok: false; error: "already_current" | "flush_failed" };
-
-export type DenMemoryContext = {
-  id: string;
-  snippet: string;
-  citation: Record<string, unknown> | null;
-  origin: string | null;
-  createdAt: string;
-};
-
-export type DenMemory = {
-  id: string;
-  content: string;
-  tags: string[] | null;
-  source: string;
-  scope: string;
-  createdAt: string;
-  updatedAt: string;
-  contexts: DenMemoryContext[];
-};
 
 export type DenMcpToken = {
   token: string;
@@ -328,6 +324,18 @@ export type DenOrgLlmProvider = {
   name: string;
   providerConfig: Record<string, unknown>;
   hasApiKey: boolean;
+  /**
+   * The env names this provider actually reads on a member's machine. Catalog
+   * providers get provider-scoped names here (their stored `providerConfig.env`
+   * keeps the catalog's names); absent from Den servers that predate it.
+   */
+  runtimeEnvKeys?: string[];
+  /**
+   * For `credentialMode: "per_member"` providers: whether the CALLING member
+   * currently has an active credential binding. Den returns it on the usable
+   * provider list; `hasApiKey` is always false for per-member providers.
+   */
+  hasMyCredential?: boolean;
   models: DenOrgLlmProviderModel[];
   createdAt: string | null;
   updatedAt: string | null;
@@ -339,6 +347,8 @@ export type DenExternalMcpConnection = {
   url: string;
   authType: "oauth" | "apikey" | "none";
   credentialMode: "shared" | "per_member";
+  /** True when an administrator exposed this connection to the agent as a standard MCP server with its own tools. */
+  exposeDirectly: boolean;
   connected: boolean;
   connectedAt: string | null;
   /** For per_member connections: whether the CALLING member has connected their own account. Always true for connected shared connections. */
@@ -424,6 +434,13 @@ export type DenBillingSummary = {
   invoices: DenBillingInvoice[];
   productId: string | null;
   benefitId: string | null;
+};
+
+export type DenOpenWorkWebAccessSource = "subscription" | "complimentary" | null;
+
+export type DenOpenWorkWebAccess = {
+  hasAccess: boolean;
+  accessSource: DenOpenWorkWebAccessSource;
 };
 
 type DenAuthResult = {
@@ -1010,6 +1027,76 @@ async function resolveDenBootstrapConfigWithRuntimeApi(
   };
 }
 
+/**
+ * Boot-time resolution of the bootstrap the shell already holds. An
+ * unactivated activation-required install has no organization server yet —
+ * its bootstrap is only the build default — so the runtime-config probe would
+ * be the install's first request to a host nobody chose. Skip it: the address
+ * the person submits is resolved by `setDenBootstrapConfig`, and a completed
+ * activation resolves here on the next boot.
+ */
+async function resolveBootBootstrapConfig(
+  input: Parameters<typeof resolveDenBootstrapConfig>[0],
+): Promise<DenBootstrapConfig> {
+  const resolved = resolveDenBootstrapConfig(input);
+  if (enterpriseActivationRequired(readDesktopDistributionInfo(), resolved)) {
+    return resolved;
+  }
+  return resolveDenBootstrapConfigWithRuntimeApi(input);
+}
+
+/**
+ * Resolve a handoff destination's base URLs. On desktop, when the caller does
+ * not already know the destination's API base, prefer the API base the
+ * destination publishes in its runtime config — the same source the durable
+ * bootstrap commit uses — so the exchange and the persisted bootstrap can
+ * never disagree about where the destination's API lives.
+ */
+export async function resolveDenBaseUrlsForDestination(
+  input: { baseUrl: string; apiBaseUrl?: string | null },
+): Promise<DenBaseUrls> {
+  const resolved = resolveDenBaseUrls(input);
+  if (input.apiBaseUrl || !isDesktopRuntime()) {
+    return resolved;
+  }
+
+  const runtimeApiBaseUrl = await fetchRuntimeConfigDenApiUrl(resolved.baseUrl);
+  if (!runtimeApiBaseUrl || !destinationApiOriginVerified(resolved.baseUrl, runtimeApiBaseUrl)) {
+    return resolved;
+  }
+
+  return {
+    ...resolved,
+    apiBaseUrl: resolveDenBaseUrls({
+      baseUrl: resolved.baseUrl,
+      apiBaseUrl: runtimeApiBaseUrl,
+    }).apiBaseUrl,
+  };
+}
+
+/**
+ * A destination-published API origin receives the one-time handoff grant and
+ * the bearer credential minted from it, so a syntactically valid URL is not
+ * enough: the published origin must have a relationship to the destination
+ * web origin this client can verify on its own. That is either the same
+ * origin (the destination's own `/api/den` proxy) or the deterministic API
+ * sibling derived for hosted deployments. Every other published value is
+ * ignored and the exchange stays on the destination's same-origin proxy,
+ * which reaches the same control plane without trusting the runtime config
+ * to route credentials.
+ */
+function destinationApiOriginVerified(webBaseUrl: string, candidate: string): boolean {
+  try {
+    const webOrigin = new URL(webBaseUrl).origin;
+    const candidateOrigin = new URL(candidate).origin;
+    if (candidateOrigin === webOrigin) return true;
+    const deterministic = denApiOriginForDenBaseUrl(webBaseUrl);
+    return deterministic !== null && new URL(deterministic).origin === candidateOrigin;
+  } catch {
+    return false;
+  }
+}
+
 function getPendingBootstrapConfig(next: DenSettings): DenBootstrapConfig | null {
   if (next.baseUrl === undefined && next.apiBaseUrl === undefined) {
     return null;
@@ -1151,7 +1238,7 @@ export async function initializeDenBootstrapConfig(): Promise<DenBootstrapConfig
 
   const initialBootstrap = readInitialDesktopBootstrapConfig();
   if (initialBootstrap) {
-    const resolved = await resolveDenBootstrapConfigWithRuntimeApi(initialBootstrap);
+    const resolved = await resolveBootBootstrapConfig(initialBootstrap);
     if (generation !== desktopBootstrapGeneration) return readDenBootstrapConfig();
     applyDesktopBootstrapConfig(resolved);
     adoptUntaggedDenSessionOrigin();
@@ -1166,7 +1253,7 @@ export async function initializeDenBootstrapConfig(): Promise<DenBootstrapConfig
   for (let attempt = 1; attempt <= SHELL_BOOTSTRAP_ATTEMPTS; attempt += 1) {
     try {
       const bootstrap = await getDesktopBootstrapConfigFromShell();
-      const resolved = await resolveDenBootstrapConfigWithRuntimeApi(bootstrap);
+      const resolved = await resolveBootBootstrapConfig(bootstrap);
       if (generation !== desktopBootstrapGeneration) return readDenBootstrapConfig();
       applyDesktopBootstrapConfig(resolved);
       adoptUntaggedDenSessionOrigin();
@@ -1207,7 +1294,7 @@ export async function initializeDenBootstrapConfig(): Promise<DenBootstrapConfig
       if (generation !== desktopBootstrapGeneration) return;
       try {
         const bootstrap = await getDesktopBootstrapConfigFromShell();
-        const resolved = await resolveDenBootstrapConfigWithRuntimeApi(bootstrap);
+        const resolved = await resolveBootBootstrapConfig(bootstrap);
         if (generation !== desktopBootstrapGeneration) return;
         applyDesktopBootstrapConfig(resolved);
         adoptUntaggedDenSessionOrigin();
@@ -1233,7 +1320,7 @@ export async function refreshDenBootstrapConfigFromShell(): Promise<DenBootstrap
     const generation = ++desktopBootstrapGeneration;
     try {
       const bootstrap = await getDesktopBootstrapConfigFromShell();
-      const resolved = await resolveDenBootstrapConfigWithRuntimeApi(bootstrap);
+      const resolved = await resolveBootBootstrapConfig(bootstrap);
       if (generation === desktopBootstrapGeneration) {
         applyDesktopBootstrapConfig(resolved);
         adoptUntaggedDenSessionOrigin();
@@ -1253,7 +1340,13 @@ export async function setDenBootstrapConfig(
   const previous = readDenBootstrapConfig();
   const normalized = await resolveDenBootstrapConfigWithRuntimeApi({
     ...next,
-    enterpriseActivation: next.enterpriseActivation ?? previous.enterpriseActivation,
+    // An omitted stamp retains the previous one; an explicit null clears it.
+    // Cross-origin handoffs rely on the explicit clear: the old control
+    // plane's activation must never mark a new control plane as activated.
+    enterpriseActivation:
+      next.enterpriseActivation !== undefined
+        ? next.enterpriseActivation
+        : previous.enterpriseActivation,
   });
 
   if (isDesktopRuntime()) {
@@ -1322,6 +1415,7 @@ export function buildDenAuthUrl(baseUrl: string, mode: "sign-in" | "sign-up"): s
     isWebDeployment() && typeof window !== "undefined" ? window.location.origin : null;
   if (
     isDesktopDeployment()
+    || import.meta.env?.VITE_OPENWORK_FORCE_MANUAL_AUTH === "1"
     || (webReturnOrigin !== null && !canUseCloudWebAuthReturn(webReturnOrigin))
   ) {
     // Desktop app, or local/dev web that cannot receive an approved webAuth
@@ -1508,7 +1602,8 @@ export function writeDenSettings(
     (previous.authToken ?? "") === authToken &&
     (previous.activeOrgId ?? "") === activeOrgId &&
     (previous.activeOrgSlug ?? "") === activeOrgSlug &&
-    (previous.activeOrgName ?? "") === activeOrgName
+    (previous.activeOrgName ?? "") === activeOrgName &&
+    (isDesktopRuntime() || window.localStorage.getItem(STORAGE_BASE_URL) === baseUrl)
   ) {
     return;
   }
@@ -1863,45 +1958,6 @@ function getWorkers(payload: unknown): DenWorkerSummary[] {
   });
 }
 
-function getMemoryContexts(value: unknown): DenMemoryContext[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.snippet !== "string") return [];
-    return [
-      {
-        id: entry.id,
-        snippet: entry.snippet,
-        citation: isRecord(entry.citation) ? entry.citation : null,
-        origin: typeof entry.origin === "string" ? entry.origin : null,
-        createdAt: typeof entry.createdAt === "string" ? entry.createdAt : "",
-      } satisfies DenMemoryContext,
-    ];
-  });
-}
-
-function getMemories(payload: unknown): DenMemory[] {
-  if (!isRecord(payload) || !Array.isArray(payload.memories)) {
-    return [];
-  }
-  return payload.memories.flatMap((entry) => {
-    if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.content !== "string") {
-      return [];
-    }
-    return [
-      {
-        id: entry.id,
-        content: entry.content,
-        tags: Array.isArray(entry.tags) ? entry.tags.filter((tag): tag is string => typeof tag === "string") : null,
-        source: typeof entry.source === "string" ? entry.source : "",
-        scope: typeof entry.scope === "string" ? entry.scope : "user",
-        createdAt: typeof entry.createdAt === "string" ? entry.createdAt : "",
-        updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
-        contexts: getMemoryContexts(entry.contexts),
-      } satisfies DenMemory,
-    ];
-  });
-}
-
 function getWorkerTokens(payload: unknown): DenWorkerTokens | null {
   if (!isRecord(payload) || !isRecord(payload.tokens)) {
     return null;
@@ -1927,12 +1983,31 @@ function parseCloudInstance(payload: unknown): DenCloudInstance | null {
     return null;
   }
 
+  const failurePayload = isRecord(payload.failure) ? payload.failure : null;
+  const failureStage = failurePayload?.stage;
+  const failureCode = typeof failurePayload?.code === "string" ? failurePayload.code.trim() : "";
+  const failureReference = typeof failurePayload?.reference === "string" ? failurePayload.reference.trim() : "";
+  const failureOccurredAt = typeof failurePayload?.occurredAt === "string" ? failurePayload.occurredAt : "";
+  const failure: DenCloudStartupFailure | null = failurePayload
+    && failureCode
+    && (failureStage === "provisioning" || failureStage === "recovery" || failureStage === "runtime")
+    && failureReference
+    && Number.isFinite(Date.parse(failureOccurredAt))
+    ? {
+        code: failureCode,
+        stage: failureStage,
+        reference: failureReference,
+        occurredAt: failureOccurredAt,
+      }
+    : null;
+
   return {
     status: payload.status,
     url: payload.url,
     imageVersion: typeof payload.imageVersion === "string" ? payload.imageVersion : null,
     ...(typeof payload.instanceName === "string" ? { instanceName: payload.instanceName } : {}),
     latestVersion: typeof payload.latestVersion === "string" ? payload.latestVersion : null,
+    ...(failure ? { failure } : {}),
   };
 }
 
@@ -2020,6 +2095,8 @@ function parseDenOrgLlmProvider(value: unknown): DenOrgLlmProvider | null {
     name: value.name,
     providerConfig: parseJsonRecord(value.providerConfig),
     hasApiKey: value.hasApiKey === true,
+    runtimeEnvKeys: parseStringList(value.runtimeEnvKeys),
+    ...(typeof value.hasMyCredential === "boolean" ? { hasMyCredential: value.hasMyCredential } : {}),
     models: Array.isArray(value.models)
       ? value.models.flatMap((model) => {
           const parsed = parseDenOrgLlmProviderModel(model);
@@ -2060,6 +2137,7 @@ function parseDenExternalMcpConnection(value: unknown): DenExternalMcpConnection
     url: value.url,
     authType: value.authType,
     credentialMode: value.credentialMode,
+    exposeDirectly: value.exposeDirectly === true,
     connected: value.connected === true,
     connectedAt: typeof value.connectedAt === "string" ? value.connectedAt : null,
     connectedForMe: value.connectedForMe === true,
@@ -2201,6 +2279,7 @@ function parsePluginConfigObject(value: unknown): DenPluginConfigObject | null {
 
 function parseExtensionSourceFormat(value: unknown): OpenWorkExtensionSourceFormat | null {
   switch (value) {
+    case "agent-plugin":
     case "openwork-builtin":
     case "openwork-extension-manifest":
     case "claude-plugin":
@@ -2708,6 +2787,34 @@ function getBillingSummary(payload: unknown): DenBillingSummary | null {
   };
 }
 
+export function parseDenOpenWorkWebAccess(payload: unknown): DenOpenWorkWebAccess | null {
+  if (!isRecord(payload) || !isRecord(payload.billing)) return null;
+  const stripe = payload.billing.stripe;
+  if (!isRecord(stripe) || !isRecord(stripe.web)) return null;
+
+  const web = stripe.web;
+  const accessSource: DenOpenWorkWebAccessSource | undefined =
+    web.accessSource === "subscription" || web.accessSource === "complimentary"
+      ? web.accessSource
+      : web.accessSource === null
+        ? null
+        : undefined;
+  if (
+    typeof web.hasAccess !== "boolean"
+    || accessSource === undefined
+    || web.hasAccess !== (accessSource !== null)
+    || (accessSource === "subscription" && web.hasEligibleSubscription !== true)
+    || (accessSource === "complimentary" && web.complimentaryAccess !== true)
+  ) {
+    return null;
+  }
+
+  return {
+    hasAccess: web.hasAccess,
+    accessSource,
+  };
+}
+
 // Den requests target a control plane that does not answer CORS preflights.
 // On desktop, route cross-origin Den calls (including a Den API on a different
 // loopback port than the renderer) through the Electron main process so the
@@ -2969,6 +3076,45 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
       };
     },
 
+    async listSavedApps(orgId: string) {
+      const payload = await requestJson<unknown>(baseUrls, "/v1/apps", {
+        method: "GET", token, organizationId: orgId,
+      });
+      if (!isRecord(payload) || !Array.isArray(payload.items) || typeof payload.enabled !== "boolean") {
+        throw new Error("Your apps could not be loaded.");
+      }
+      return { enabled: payload.enabled, sharingEnabled: payload.sharingEnabled === true, items: payload.items.map((item) => savedAppSummarySchema.parse(item)) };
+    },
+    async getSavedApp(orgId: string, appId: string, options: { revisionId?: string; receiptId?: string; timeZone?: string } = {}) {
+      const params = new URLSearchParams();
+      if (options.revisionId) params.set("revisionId", options.revisionId);
+      if (options.receiptId) params.set("receiptId", options.receiptId);
+      if (options.timeZone) params.set("timeZone", options.timeZone);
+      return savedAppDetailSchema.parse(await requestJson<unknown>(baseUrls, `/v1/apps/${encodeURIComponent(appId)}?${params}`, {
+        method: "GET", token, organizationId: orgId,
+      }));
+    },
+    async saveApp(orgId: string, appId: string, input: SaveApp) {
+      return generatedArtifactViewSchema.parse(await requestJson<unknown>(baseUrls, `/v1/apps/${encodeURIComponent(appId)}/save`, {
+        method: "POST", token, organizationId: orgId, body: input,
+      }));
+    },
+    async deleteApp(orgId: string, appId: string) {
+      await requestJson<unknown>(baseUrls, `/v1/artifact-views/${encodeURIComponent(appId)}/retire`, {
+        method: "POST", token, organizationId: orgId,
+      });
+    },
+    async shareSavedApp(orgId: string, appId: string, email: string) {
+      await requestJson<unknown>(baseUrls, `/v1/apps/${encodeURIComponent(appId)}/share`, {
+        method: "POST", token, organizationId: orgId, body: { email },
+      });
+    },
+    async setAppOnDashboard(orgId: string, appId: string, added: boolean) {
+      await requestJson<unknown>(baseUrls, `/v1/apps/${encodeURIComponent(appId)}/dashboard`, {
+        method: "POST", token, organizationId: orgId, body: { added },
+      });
+    },
+
     /** Organization-managed dashboards granted to the signed-in member. */
     async listGrantedDashboards(orgId: string): Promise<DenGrantedDashboard[]> {
       const context = await requestJson<unknown>(baseUrls, "/v1/org", {
@@ -3000,29 +3146,6 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
         organizationId: orgId,
       });
       return getWorkers(payload);
-    },
-
-    async listMemory(orgId: string): Promise<DenMemory[]> {
-      const payload = await requestJson<unknown>(baseUrls, "/v1/memory", {
-        method: "GET",
-        token,
-        organizationId: orgId,
-      });
-      return getMemories(payload);
-    },
-
-    async deleteMemory(orgId: string, memoryId: string): Promise<void> {
-      const result = await requestJsonRaw<unknown>(baseUrls, `/v1/memory/${encodeURIComponent(memoryId)}`, {
-        method: "DELETE",
-        token,
-        organizationId: orgId,
-      });
-      // 404 means the memory is already gone (or not owned) — idempotent from the caller's view.
-      if (!result.ok && result.status !== 404) {
-        const payload = result.json;
-        const code = isRecord(payload) && typeof payload.error === "string" ? payload.error : "request_failed";
-        throw new DenApiError(result.status, code, getErrorMessage(payload, `Delete failed with ${result.status}.`));
-      }
     },
 
     async mintMcpToken(orgId: string): Promise<DenMcpToken> {
@@ -3064,6 +3187,61 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
         throw new DenApiError(500, "invalid_cloud_instance_payload", "Cloud instance response was invalid.");
       }
       return instance;
+    },
+
+    async retryCloudInstance(orgId: string): Promise<DenCloudInstance> {
+      let payload: unknown;
+      try {
+        payload = await requestJson<unknown>(baseUrls, "/v1/cloud/instance/retry", {
+          method: "POST",
+          token,
+          organizationId: orgId,
+          body: {},
+        });
+      } catch (error) {
+        // Desktop releases can reach a Den that predates explicit recovery.
+        // Fall back to the established status request so the Retry action stays
+        // safe during staggered rollouts; newer Dens still bypass the cooldown.
+        if (!(error instanceof DenApiError) || error.status !== 404) throw error;
+        payload = await requestJson<unknown>(baseUrls, "/v1/cloud/instance", {
+          method: "GET",
+          token,
+          organizationId: orgId,
+        });
+      }
+      const instance = parseCloudInstance(payload);
+      if (!instance) {
+        throw new DenApiError(500, "invalid_cloud_instance_payload", "Cloud retry response was invalid.");
+      }
+      return instance;
+    },
+
+    async getOpenWorkWebAccess(orgId: string): Promise<DenOpenWorkWebAccess> {
+      const context = await requestJson<unknown>(baseUrls, "/v1/org", {
+        method: "GET",
+        token,
+        organizationId: orgId,
+      });
+      const capabilities = isRecord(context) && isRecord(context.capabilities)
+        ? context.capabilities
+        : null;
+      // Missing means unsupported. This follows the established Den capability
+      // negotiation pattern so a newer hosted client never calls the Web billing
+      // route on an older Den deployment that does not advertise the contract.
+      if (capabilities?.openworkWeb !== true) {
+        return { hasAccess: false, accessSource: null };
+      }
+
+      const payload = await requestJson<unknown>(baseUrls, "/v1/billing/web", {
+        method: "GET",
+        token,
+        organizationId: orgId,
+      });
+      const access = parseDenOpenWorkWebAccess(payload);
+      if (!access) {
+        throw new DenApiError(500, "invalid_openwork_web_access_payload", "OpenWork Web access response was invalid.");
+      }
+      return access;
     },
 
     async updateCloudInstance(orgId: string): Promise<DenCloudInstanceUpdateResult> {
@@ -3142,6 +3320,26 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
         body: input,
         automationModelAttentionCapable: true,
       });
+    },
+
+    /** Web creation surface: placement is fixed to OpenWork Cloud by the route. */
+    async createCloudAutomation(orgId: string, input: CreateCloudAutomation): Promise<AutomationDetail> {
+      return requestJson<AutomationDetail>(baseUrls, "/v1/cloud-automations", {
+        method: "POST",
+        token,
+        organizationId: orgId,
+        body: input,
+        automationModelAttentionCapable: true,
+      });
+    },
+
+    async getWorkflow(orgId: string, configObjectId: string): Promise<WorkflowDetail> {
+      const payload = await requestJson<{ script: WorkflowDetail }>(
+        baseUrls,
+        `/v1/workflows/${encodeURIComponent(configObjectId)}?maxAgeMs=86400000`,
+        { method: "GET", token, organizationId: orgId },
+      );
+      return payload.script;
     },
 
     async getAutomation(orgId: string, automationId: string): Promise<AutomationDetail> {
@@ -3354,6 +3552,13 @@ export function createDenClient(options: { baseUrl: string; apiBaseUrl?: string 
             rawSourceText?: string;
             normalizedPayloadJson?: Record<string, unknown>;
             metadata: { name: string; description?: string };
+          };
+          /** Connector setup for an mcp component; Den configures the server before the plugin is returned. */
+          connection?: {
+            authType: "oauth" | "apikey" | "none";
+            credentialMode: "per_member" | "shared";
+            apiKey?: string;
+            oauthClient?: { clientId: string; clientSecret?: string };
           };
         }>;
         orgWide?: boolean;

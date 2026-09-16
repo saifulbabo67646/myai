@@ -24,6 +24,7 @@ export interface SelfHostServerOptions {
   slug: string;
   ownerEmails: string[];
   allowPublicSignup?: boolean;
+  bootstrapCode?: string;
 }
 
 export interface SelfHostDen {
@@ -132,7 +133,6 @@ async function runDbPush(databaseUrl: string): Promise<void> {
     const commands = process.env.OPENWORK_EVAL_DEN_RUNTIME_PREPARED === "1"
       ? [
           ["--filter", "@openwork-ee/den-db", "exec", "node", "--import", "tsx", "./node_modules/drizzle-kit/bin.cjs", "push", "--config", "drizzle.config.ts"],
-          ["--filter", "@openwork-ee/den-db", "exec", "node", "--import", "tsx", "scripts/ensure-fulltext-indexes.ts"],
           ["--filter", "@openwork-ee/den-db", "exec", "node", "--import", "tsx", "scripts/ensure-schema-repairs.ts"],
         ]
       : [["--filter", "@openwork-ee/den-db", "db:push"]];
@@ -209,6 +209,9 @@ export async function selfHostServer(options: SelfHostServerOptions): Promise<Se
       DEN_SINGLE_ORG_SLUG: options.slug,
       DEN_SINGLE_ORG_OWNER_EMAILS: options.ownerEmails.join(","),
       DEN_SINGLE_ORG_ALLOW_PUBLIC_SIGNUP: String(options.allowPublicSignup ?? false),
+      DEN_INITIAL_ADMIN_BOOTSTRAP_CODE: options.bootstrapCode ?? "",
+      RESEND_API_KEY: "",
+      SMTP_HOST: "",
       DEN_REQUIRE_EMAIL_VERIFICATION: "false",
       DEN_PASSWORD_BREACH_SCREENING_ENABLED: "false",
       OPENWORK_DEV_MODE: "1",

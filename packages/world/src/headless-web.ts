@@ -28,6 +28,7 @@ import {
 import type { ChildProcess } from "node:child_process";
 import type { HeadlessRuntimeManifest, HeadlessWebState } from "./headless-web-helpers.ts";
 import { assertWorldName } from "./store.ts";
+import { headlessBrowserEnvironment } from "./headless-browser.ts";
 
 const DEFAULT_WEB_PORT = "5178";
 const DEFAULT_SERVER_PORT = "8778";
@@ -43,6 +44,7 @@ export interface HeadlessWebLaunchOptions {
   keepTokens?: boolean;
   rotateTokens?: boolean;
   env?: NodeJS.ProcessEnv;
+  browserHostSuffix?: string;
 }
 
 export interface HeadlessWebHandle {
@@ -59,6 +61,8 @@ export interface HeadlessWorldRuntimePaths {
   serverConfigPath: string;
   webLogPath: string;
   headlessLogPath: string;
+  /** Sessions database for the world's managed OpenCode engine. */
+  opencodeDbPath: string;
 }
 
 export interface InstalledProductionHeadlessState {
@@ -291,6 +295,7 @@ export function resolveHeadlessWorldRuntimePaths(
       serverConfigPath: resolveHeadlessServerConfigPath(repoRoot),
       webLogPath: join(directory, "dev-web.log"),
       headlessLogPath: join(directory, "dev-headless.log"),
+      opencodeDbPath: join(directory, "dev-headless-opencode.db"),
     };
   }
   const directory = join(repoRoot, "tmp", "worlds", "runtime", name);
@@ -300,7 +305,24 @@ export function resolveHeadlessWorldRuntimePaths(
     serverConfigPath: join(directory, "server.json"),
     webLogPath: join(directory, "web.log"),
     headlessLogPath: join(directory, "server.log"),
+    opencodeDbPath: join(directory, "opencode.db"),
   };
+}
+
+/**
+ * Engine data for an `isolated` world. Only the sessions database moves: the
+ * default engine otherwise opens the same ~/.local/share/opencode/opencode.db
+ * as the installed desktop app, so both processes contend for one SQLite
+ * writer and the world's sessions land in the person's history. Provider
+ * credentials and the engine log stay where they are so the world keeps
+ * working with the person's configured providers. An explicit OPENCODE_DB wins.
+ */
+export function isolatedHeadlessEngineEnv(
+  runtimePaths: Pick<HeadlessWorldRuntimePaths, "opencodeDbPath">,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const explicit = env.OPENCODE_DB?.trim();
+  return { OPENCODE_DB: explicit || runtimePaths.opencodeDbPath };
 }
 
 export async function readHeadlessRuntimeManifest(path: string): Promise<HeadlessRuntimeManifest | null> {
@@ -634,13 +656,14 @@ async function writeRuntimeManifest(manifest: HeadlessRuntimeManifest): Promise<
 function startRuntimeSupervisor(
   manifest: HeadlessRuntimeManifest,
   repoRoot: string,
+  env: NodeJS.ProcessEnv,
 ): ChildProcess {
   return spawn(
     process.execPath,
     [join(repoRoot, "packages", "world", "bin", "headless-monitor.mjs"), manifest.runtimeManifestPath],
     {
       cwd: repoRoot,
-      env: process.env,
+      env,
       stdio: "ignore",
       detached: true,
     },
@@ -650,6 +673,7 @@ function startRuntimeSupervisor(
 async function ensureRuntimeSupervisor(
   manifest: HeadlessRuntimeManifest,
   repoRoot: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<{ manifest: HeadlessRuntimeManifest; supervisor: ChildProcess | null }> {
   if (
     manifest.supervisorPid
@@ -657,7 +681,7 @@ async function ensureRuntimeSupervisor(
   ) {
     return { manifest, supervisor: null };
   }
-  const supervisor = startRuntimeSupervisor(manifest, repoRoot);
+  const supervisor = startRuntimeSupervisor(manifest, repoRoot, env);
   try {
     await waitForSpawn(supervisor, "headless supervisor");
     const supervised: HeadlessRuntimeManifest = {
@@ -678,6 +702,9 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
   }
   const repoRoot = resolve(options.repoRoot);
   const env = options.env ?? process.env;
+  if (options.browserHostSuffix && (options.state !== "isolated" || env.OPENWORK_PUBLIC_HOST)) {
+    throw new Error("External browser origins require isolated state and loopback runtime addresses.");
+  }
   assertWorldName(options.name);
   assertHeadlessLaunchSafety(options.state, env);
   const runtimePaths = resolveHeadlessWorldRuntimePaths(repoRoot, options.name);
@@ -705,7 +732,7 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
           },
         };
     await writeRuntimeManifest(adopted);
-    const supervised = await ensureRuntimeSupervisor(adopted, repoRoot);
+    const supervised = await ensureRuntimeSupervisor(adopted, repoRoot, env);
     supervised.supervisor?.unref();
     return {
       manifest: supervised.manifest,
@@ -752,11 +779,12 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
   const headlessLogPath = runtimePaths.headlessLogPath;
   const openworkUrl = `http://${clientHost}:${openworkPort}`;
   const webUrl = `http://${clientHost}:${webPort}`;
+  const browserEnv = headlessBrowserEnvironment({ browserHostSuffix: options.browserHostSuffix, openworkUrl });
   const denProxyEnabled = env.OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY === undefined
     ? true
     : readBool(env.OPENWORK_DEV_HEADLESS_WEB_DEN_PROXY);
   const denTarget = denProxyEnabled ? normalizeDenTarget(env.OPENWORK_DEV_DEN_PROXY_TARGET) : null;
-  const denApiUrl = denTarget ? `${webUrl}/api/den` : null;
+  const denApiUrl = denTarget ? (options.browserHostSuffix ? "/api/den" : `${webUrl}/api/den`) : null;
   const clientConnection = resolveHeadlessClientConnection({
     state: options.state,
     env,
@@ -774,6 +802,7 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
     VITE_OPENWORK_TOKEN: clientConnection.token,
     VITE_OPENWORK_FORCE_ENV_SETTINGS: "1",
     VITE_OPENWORK_DEPLOYMENT: env.VITE_OPENWORK_DEPLOYMENT ?? "web",
+    ...browserEnv,
     ...(denTarget && denApiUrl ? {
       OPENWORK_DEV_HEADLESS_DEN_TARGET: denTarget,
       VITE_DEN_API_BASE_URL: env.VITE_DEN_API_BASE_URL ?? denApiUrl,
@@ -783,7 +812,7 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
   const headlessEnv: NodeJS.ProcessEnv = {
     ...env,
     OPENWORK_DEV_MODE: "1",
-    ...(productionState ? installedProductionHeadlessEnv(productionState) : {}),
+    ...(productionState ? installedProductionHeadlessEnv(productionState) : isolatedHeadlessEngineEnv(runtimePaths, env)),
     ...(productionState ? {} : { OPENWORK_WORKSPACE: workspace }),
     OPENWORK_HOST: host,
     OPENWORK_REMOTE_ACCESS: remoteAccessEnabled ? "1" : "0",
@@ -852,7 +881,7 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
     ]);
     await writeRuntimeManifest(manifest);
     await waitForHealthy(manifest);
-    const supervised = await ensureRuntimeSupervisor(manifest, repoRoot);
+    const supervised = await ensureRuntimeSupervisor(manifest, repoRoot, env);
     manifest = supervised.manifest;
     acquiredManifest = manifest;
     acquiredSupervisor = supervised.supervisor;

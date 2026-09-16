@@ -4,6 +4,7 @@ import { enginePoolForConfig } from "./engine-pool.js";
 import { resolveWorkspaceOpencodeConnection } from "./opencode-connection.js";
 import { readGlobalRuntimeOpencodeConfig, runtimeProviderMap } from "./runtime-opencode-config-store.js";
 import type { ServerConfig } from "./types.js";
+import { readOpenworkWorkspaceConfig, writeOpenworkWorkspaceConfig } from "./openwork-workspace-config-store.js";
 import { findManagedEngineWorkspace } from "./workspaces.js";
 
 /**
@@ -28,15 +29,38 @@ type ManagedProviderAuthLogger = {
 
 type EnvReader = { list: () => Promise<Array<{ key: string; value: string }>> };
 
+/**
+ * A pool standby that is healthy but not yet primary. Seeding it before the
+ * flip means the new generation never serves a request without credentials,
+ * and the next primary-scoped sync finds the same applied fingerprints
+ * instead of re-delivering.
+ */
+export type ManagedProviderAuthStandbyTarget = {
+  generationId: string;
+  baseUrl: string;
+  username: string;
+  password: string;
+};
+
 export type ManagedProviderAuthInput = {
   config: ServerConfig;
   env: EnvReader;
   fetchImpl?: typeof globalThis.fetch;
   logger?: ManagedProviderAuthLogger;
+  /** Deliver to this standby instead of the current primary. */
+  target?: ManagedProviderAuthStandbyTarget;
+  /** Previously materialized cloud rows recovered before their runtime removal. */
+  retiredProviderIds?: string[];
 };
 
 export type ManagedProviderAuthResult = {
   delivered: string[];
+  /**
+   * Delivered providers whose credential value differs from the last value
+   * this process delivered anywhere. Re-seeding a replaced engine with the
+   * same key is delivered but not rotated.
+   */
+  rotated: string[];
   unchanged: string[];
   removed: string[];
   skipped: Array<{ providerId: string; reason: "no_env_names" | "no_stored_credential" }>;
@@ -47,6 +71,8 @@ type ManagedProviderAuthState = {
   epoch: number;
   appliedTargetScope: string | null;
   deliveredFingerprints: Map<string, string>;
+  /** Survives target changes: distinguishes rotation from re-seeding a new engine. */
+  lastDeliveredValueFingerprints: Map<string, string>;
   ownedProviderIdsByScope: Map<string, Set<string>>;
   tail: Promise<void>;
 };
@@ -72,6 +98,18 @@ let cacheEpoch = 0;
 
 const fingerprint = (value: string) => createHash("sha256").update(value).digest("hex");
 
+/**
+ * Budget for one engine auth PUT/DELETE. The engine answers these on the
+ * loopback in milliseconds; a request that hangs (instance rebuild wedged,
+ * half-open socket) must surface as a failed delivery so the caller can keep
+ * the reload owed and retry, instead of stalling the sync queue or a standby
+ * flip forever.
+ */
+function authRequestTimeoutMs(): number {
+  const raw = Number(process.env.OPENWORK_PROVIDER_AUTH_TIMEOUT_MS ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : 10_000;
+}
+
 function stateForConfig(config: ServerConfig): ManagedProviderAuthState {
   const current = stateByConfig.get(config);
   if (current) {
@@ -79,6 +117,7 @@ function stateForConfig(config: ServerConfig): ManagedProviderAuthState {
       current.epoch = cacheEpoch;
       current.appliedTargetScope = null;
       current.deliveredFingerprints.clear();
+      current.lastDeliveredValueFingerprints.clear();
     }
     return current;
   }
@@ -86,6 +125,7 @@ function stateForConfig(config: ServerConfig): ManagedProviderAuthState {
     epoch: cacheEpoch,
     appliedTargetScope: null,
     deliveredFingerprints: new Map(),
+    lastDeliveredValueFingerprints: new Map(),
     ownedProviderIdsByScope: new Map(),
     tail: Promise.resolve(),
   };
@@ -106,11 +146,28 @@ function basicAuthHeader(username: string, password: string): string | undefined
     : undefined;
 }
 
-function resolveManagedProviderAuthTarget(config: ServerConfig): ManagedProviderAuthTarget | null {
+function resolveManagedProviderAuthTarget(
+  config: ServerConfig,
+  standby?: ManagedProviderAuthStandbyTarget,
+): ManagedProviderAuthTarget | null {
   const workspace = findManagedEngineWorkspace(config.workspaces) ?? config.workspaces[0];
   if (!workspace) return null;
 
   const pool = enginePoolForConfig(config);
+  if (standby) {
+    // Same scope shape as the primary branch below, so the flip that promotes
+    // this generation leaves the applied fingerprints valid.
+    const baseUrl = normalizeBaseUrl(standby.baseUrl);
+    if (!pool || !baseUrl) return null;
+    const authHeader = basicAuthHeader(standby.username, standby.password);
+    return {
+      scope: `workspace:${workspace.id}\u0000generation:${standby.generationId}`,
+      ownershipScope: "managed-engine",
+      baseUrl,
+      ...(authHeader ? { authHeader } : {}),
+      isCurrent: () => enginePoolForConfig(config) === pool,
+    };
+  }
   if (pool) {
     const primary = pool.connections().find((connection) => connection.role === "primary");
     const baseUrl = normalizeBaseUrl(primary?.baseUrl);
@@ -164,7 +221,10 @@ function credentialEnvRank(name: string): number | null {
   return null;
 }
 
-function selectPrimaryCredentialEnvName(envNames: string[], availableNames: Iterable<string>): string | null {
+export function selectPrimaryCredentialEnvName(
+  envNames: string[],
+  availableNames: Iterable<string>,
+): string | null {
   const available = new Set([...availableNames].filter((name) => name.trim().length > 0));
   const orderedNames = envNames.filter((name) => available.has(name));
   const ranked = orderedNames
@@ -195,6 +255,7 @@ export function syncManagedProviderAuth(input: ManagedProviderAuthInput): Promis
 async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Promise<ManagedProviderAuthResult> {
   const result: ManagedProviderAuthResult = {
     delivered: [],
+    rotated: [],
     unchanged: [],
     removed: [],
     skipped: [],
@@ -211,7 +272,7 @@ async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Pr
     }
   }
 
-  const target = resolveManagedProviderAuthTarget(input.config);
+  const target = resolveManagedProviderAuthTarget(input.config, input.target);
   if (!target) return result;
   const operationEpoch = cacheEpoch;
   const state = stateForConfig(input.config);
@@ -226,6 +287,15 @@ async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Pr
   if (target.authHeader) headers.authorization = target.authHeader;
 
   const managedIds = new Set(Object.keys(providers));
+  const ownershipKey = `__managed_provider_auth__:${target.ownershipScope}`;
+  const persisted = await readOpenworkWorkspaceConfig(input.config, ownershipKey);
+  const savedIds = Array.isArray(persisted.providerIds)
+    ? persisted.providerIds.filter((id): id is string => typeof id === "string") : [];
+  const ownedProviderIds = state.ownedProviderIdsByScope.get(target.ownershipScope) ?? new Set<string>();
+  for (const id of [...savedIds, ...(input.retiredProviderIds ?? [])]) ownedProviderIds.add(id);
+  state.ownedProviderIdsByScope.set(target.ownershipScope, ownedProviderIds);
+  const persist = () => writeOpenworkWorkspaceConfig(input.config, ownershipKey, () => ({ providerIds: [...ownedProviderIds] }));
+  await persist();
 
   for (const [providerId, entry] of Object.entries(providers)) {
     if (!isCurrent()) return result;
@@ -257,6 +327,7 @@ async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Pr
         method: "PUT",
         headers,
         body: JSON.stringify({ type: "api", key: credential }),
+        signal: AbortSignal.timeout(authRequestTimeoutMs()),
       });
       if (!isCurrent()) return result;
       if (!response.ok) {
@@ -268,12 +339,10 @@ async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Pr
         continue;
       }
       state.deliveredFingerprints.set(providerId, next);
-      let ownedProviderIds = state.ownedProviderIdsByScope.get(target.ownershipScope);
-      if (!ownedProviderIds) {
-        ownedProviderIds = new Set();
-        state.ownedProviderIdsByScope.set(target.ownershipScope, ownedProviderIds);
-      }
+      if (state.lastDeliveredValueFingerprints.get(providerId) !== next) result.rotated.push(providerId);
+      state.lastDeliveredValueFingerprints.set(providerId, next);
       ownedProviderIds.add(providerId);
+      await persist();
       result.delivered.push(providerId);
     } catch (error) {
       if (!isCurrent()) return result;
@@ -285,9 +354,7 @@ async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Pr
     }
   }
 
-  // Only ever remove ids this process delivered. Desktop users authenticate
-  // providers themselves and those must never be touched here.
-  const ownedProviderIds = state.ownedProviderIdsByScope.get(target.ownershipScope) ?? new Set<string>();
+  // Delivery provenance survives restart and stays bound to this engine target.
   for (const providerId of [...ownedProviderIds]) {
     if (managedIds.has(providerId)) continue;
     if (!isCurrent()) return result;
@@ -295,6 +362,7 @@ async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Pr
       const response = await fetchImpl(`${target.baseUrl}/auth/${encodeURIComponent(providerId)}`, {
         method: "DELETE",
         headers,
+        signal: AbortSignal.timeout(authRequestTimeoutMs()),
       });
       if (!isCurrent()) return result;
       if (!response.ok) {
@@ -306,6 +374,7 @@ async function reconcileManagedProviderAuth(input: ManagedProviderAuthInput): Pr
       }
       state.deliveredFingerprints.delete(providerId);
       ownedProviderIds.delete(providerId);
+      await persist();
       result.removed.push(providerId);
     } catch (error) {
       if (!isCurrent()) return result;

@@ -5,7 +5,7 @@ files, derived from the MIT-licensed portions of OpenWork
 (https://github.com/different-ai/openwork) and built on OpenCode, running any
 model from 50+ providers. Two surfaces live in this repo:
 
-- **Desktop app** (`apps/`, `packages/`) — local-first agent workspace: chat on
+* **Desktop app** (`apps/`, `packages/`) — local-first agent workspace: chat on
   files, skills, browser automation, scheduled automations, Anthropic-compatible
   plugins.
 - **myai server** (Phase 1, planned: `apps/myai-server`) — self-hosted
@@ -54,7 +54,7 @@ one `wp/<id>-<slug>` branch = one PR. Never touch paths owned by another WP.
 - Shipped builds must not advertise OpenWork hosts (`*.openworklabs.com`),
   product names, gateway headers, or release repositories.
 
-## Verification (every change)
+## Confidentiality (hard rule — this repo is public)
 
 - The only proof path is `evals/specs/**/*.test.ts` with `test` from
   `@openwork/testkit`; app-driving E2E tests use `.e2e.test.ts`. Prose,
@@ -92,9 +92,9 @@ one `wp/<id>-<slug>` branch = one PR. Never touch paths owned by another WP.
 
 ## Coding
 
-- pnpm only, never npm/yarn. TypeScript: never `any`, typecasts, or `as` unless
+* pnpm only, never npm/yarn. TypeScript: never `any`, typecasts, or `as` unless
   100% necessary or instructed.
-- Prefer Tailwind, React, shadcn/ui (Base UI), TanStack Query, Zustand, Zod,
+* Prefer Tailwind, React, shadcn/ui (Base UI), TanStack Query, Zustand, Zod,
   Drizzle, Better-Auth. Reuse `@/components`; end users are non-technical.
 - Smallest possible diff, then make it smaller. Propose the simpler solution.
   No fallback expressions when types or control flow already guarantee a value.

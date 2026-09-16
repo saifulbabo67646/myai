@@ -6,6 +6,13 @@ import type { PromptMode } from "../../../../app/types";
 export type SessionDraftSnapshot = {
   text: string;
   mode: PromptMode;
+  /**
+   * Text of the follow-ups queued behind a running task ("Send when agent
+   * finishes"), in send order. Present only while at least one is waiting.
+   * Kept beside the composer text so a restart can hand them back as an
+   * unsent draft instead of dropping them or sending them unattended.
+   */
+  queued?: string[];
 };
 
 export type SessionDraftIdentity = {
@@ -18,7 +25,10 @@ export type SessionDraftWriteResult =
   | { status: "conflict"; snapshot: SessionDraftSnapshot | null }
   | { status: "unavailable"; snapshot: SessionDraftSnapshot | null };
 
-type StoredDraft = SessionDraftSnapshot & {
+type StoredDraft = {
+  text: string;
+  mode: PromptMode;
+  queued: string[];
   revision: number;
 };
 
@@ -48,6 +58,12 @@ export const SESSION_DRAFT_STORAGE_KEY = "openwork.session-drafts.v2";
 export const LEGACY_SESSION_DRAFT_STORAGE_KEY = "openwork.session-drafts.v1";
 export const LOCAL_SESSION_DRAFT_SCOPE = "local";
 export const MAX_SESSION_DRAFT_COUNT = 100;
+/**
+ * Reserved session slot for the prompt typed in a workspace's new-task
+ * composer before its session exists. Engine session ids are `ses_…`, so this
+ * can never collide with a real conversation.
+ */
+export const NEW_TASK_DRAFT_SESSION_ID = "__new-task__";
 
 const EMPTY_DOCUMENT: DraftDocument = {
   version: 2,
@@ -62,6 +78,12 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const normalizedOpaqueId = (value: string) => encodeURIComponent(value.trim());
+
+const parseQueued = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+
+const isEmptyStoredDraft = (draft: Pick<StoredDraft, "text" | "mode" | "queued">) =>
+  !draft.text && draft.mode === "prompt" && draft.queued.length === 0;
 
 export function cloudSessionDraftScope(identity: SessionDraftIdentity | null | undefined): string | null {
   const principalId = identity?.principalId.trim() ?? "";
@@ -105,8 +127,9 @@ function parseDocument(raw: string | null): DraftDocument {
     for (const [key, value] of Object.entries(parsed.drafts)) {
       if (!key || !isRecord(value) || typeof value.text !== "string" || !isPromptMode(value.mode)) continue;
       if (typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1) continue;
-      if (!value.text && value.mode === "prompt") continue;
-      drafts[key] = { text: value.text, mode: value.mode, revision: value.revision };
+      const queued = parseQueued(value.queued);
+      if (isEmptyStoredDraft({ text: value.text, mode: value.mode, queued })) continue;
+      drafts[key] = { text: value.text, mode: value.mode, queued, revision: value.revision };
       highestRevision = Math.max(highestRevision, value.revision);
     }
 
@@ -130,7 +153,9 @@ function sameStoredDraft(left: StoredDraft | undefined, right: StoredDraft | und
   if (!left || !right) return left === right;
   return left.revision === right.revision
     && left.text === right.text
-    && left.mode === right.mode;
+    && left.mode === right.mode
+    && left.queued.length === right.queued.length
+    && left.queued.every((item, index) => item === right.queued[index]);
 }
 
 function documentFingerprint(document: DraftDocument) {
@@ -217,9 +242,49 @@ export function createSessionDraftStore(options: DraftStoreOptions) {
     if (!stored) return null;
     const existing = visibleSnapshots.get(stored);
     if (existing) return existing;
-    const snapshot = { text: stored.text, mode: stored.mode };
+    const snapshot: SessionDraftSnapshot = stored.queued.length > 0
+      ? { text: stored.text, mode: stored.mode, queued: [...stored.queued] }
+      : { text: stored.text, mode: stored.mode };
     visibleSnapshots.set(stored, snapshot);
     return snapshot;
+  };
+
+  /**
+   * Replace one stored entry under the same compare-and-swap guard as `save`.
+   * `next` returning null deletes the entry.
+   */
+  const replaceEntry = (
+    key: string,
+    next: (latest: StoredDraft | undefined, revision: number) => StoredDraft | null,
+  ): SessionDraftWriteResult => {
+    const expected = loadCache().drafts[key];
+    const latestDocument = parseDocument(readRaw());
+    const latest = latestDocument.drafts[key];
+    if (!sameStoredDraft(expected, latest)) {
+      replaceCache(latestDocument);
+      return { status: "conflict", snapshot: currentSnapshot(key) };
+    }
+    const entry = next(latest, latestDocument.nextRevision);
+    if (entry === null && !latest) return { status: "saved", snapshot: null };
+    if (entry !== null && latest && sameStoredDraft({ ...entry, revision: latest.revision }, latest)) {
+      return { status: "saved", snapshot: currentSnapshot(key) };
+    }
+
+    const drafts = { ...latestDocument.drafts };
+    if (entry === null) delete drafts[key];
+    else drafts[key] = entry;
+    const oldest = Object.entries(drafts)
+      .sort((left, right) => left[1].revision - right[1].revision)
+      .slice(0, Math.max(0, Object.keys(drafts).length - MAX_SESSION_DRAFT_COUNT));
+    for (const [oldestKey] of oldest) delete drafts[oldestKey];
+
+    const nextDocument: DraftDocument = {
+      version: 2,
+      nextRevision: entry === null ? latestDocument.nextRevision : entry.revision + 1,
+      drafts,
+    };
+    if (!write(nextDocument)) return { status: "unavailable", snapshot: currentSnapshot(key) };
+    return { status: "saved", snapshot: currentSnapshot(key) };
   };
 
   const get = (
@@ -231,6 +296,10 @@ export function createSessionDraftStore(options: DraftStoreOptions) {
     return key ? currentSnapshot(key) : null;
   };
 
+  /**
+   * Forget the composer text. Follow-ups still waiting to be sent are not
+   * composer text and stay stored until their own queue mutation removes them.
+   */
   const clear = (
     scopeId: string | null | undefined,
     workspaceId: string,
@@ -238,21 +307,10 @@ export function createSessionDraftStore(options: DraftStoreOptions) {
   ): SessionDraftWriteResult => {
     const key = sessionDraftScopeKey(scopeId, workspaceId, sessionId);
     if (!key) return { status: "unavailable", snapshot: null };
-
-    const expected = loadCache().drafts[key];
-    const latestDocument = parseDocument(readRaw());
-    const latest = latestDocument.drafts[key];
-    if (!sameStoredDraft(expected, latest)) {
-      replaceCache(latestDocument);
-      return { status: "conflict", snapshot: currentSnapshot(key) };
-    }
-    if (!latest) return { status: "saved", snapshot: null };
-
-    const drafts = { ...latestDocument.drafts };
-    delete drafts[key];
-    const nextDocument: DraftDocument = { ...latestDocument, drafts };
-    if (!write(nextDocument)) return { status: "unavailable", snapshot: currentSnapshot(key) };
-    return { status: "saved", snapshot: null };
+    return replaceEntry(key, (latest, revision) => {
+      if (!latest || latest.queued.length === 0) return null;
+      return { text: "", mode: "prompt", queued: latest.queued, revision };
+    });
   };
 
   const save = (
@@ -263,41 +321,26 @@ export function createSessionDraftStore(options: DraftStoreOptions) {
   ): SessionDraftWriteResult => {
     const key = sessionDraftScopeKey(scopeId, workspaceId, sessionId);
     if (!key) return { status: "unavailable", snapshot: null };
-    if (!snapshot.text && snapshot.mode === "prompt") {
-      return clear(scopeId, workspaceId, sessionId);
-    }
+    return replaceEntry(key, (latest, revision) => {
+      const entry = { text: snapshot.text, mode: snapshot.mode, queued: snapshot.queued ?? latest?.queued ?? [], revision };
+      return isEmptyStoredDraft(entry) ? null : entry;
+    });
+  };
 
-    const expected = loadCache().drafts[key];
-    const latestDocument = parseDocument(readRaw());
-    const latest = latestDocument.drafts[key];
-    if (!sameStoredDraft(expected, latest)) {
-      replaceCache(latestDocument);
-      return { status: "conflict", snapshot: currentSnapshot(key) };
-    }
-
-    const revision = latestDocument.nextRevision;
-    const drafts = {
-      ...latestDocument.drafts,
-      [key]: { text: snapshot.text, mode: snapshot.mode, revision },
-    };
-    const oldest = Object.entries(drafts)
-      .sort((left, right) => left[1].revision - right[1].revision)
-      .slice(0, Math.max(0, Object.keys(drafts).length - MAX_SESSION_DRAFT_COUNT));
-    for (const [oldestKey] of oldest) delete drafts[oldestKey];
-
-    const nextDocument: DraftDocument = {
-      version: 2,
-      nextRevision: revision + 1,
-      drafts,
-    };
-    const normalized = { text: snapshot.text, mode: snapshot.mode };
-    if (!write(nextDocument)) return { status: "unavailable", snapshot: currentSnapshot(key) };
-    return { status: "saved", snapshot: normalized };
+  /** Mirror the follow-ups waiting behind a running task under an already
+   * composed draft key, leaving the composer text untouched. */
+  const saveQueued = (key: string, queued: readonly string[]): SessionDraftWriteResult => {
+    if (!key) return { status: "unavailable", snapshot: null };
+    return replaceEntry(key, (latest, revision) => {
+      const entry = { text: latest?.text ?? "", mode: latest?.mode ?? "prompt", queued: [...queued], revision };
+      return isEmptyStoredDraft(entry) ? null : entry;
+    });
   };
 
   return {
     get,
     save,
+    saveQueued,
     clear,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -363,6 +406,10 @@ export const clearSessionDraft = (
 ) => getBrowserStore()?.clear(scopeId, workspaceId, sessionId)
   ?? { status: "unavailable", snapshot: null };
 
+/** `scopeKey` is a composed `sessionDraftScopeKey`, the form the composer store records per session. */
+export const saveSessionQueuedDrafts = (scopeKey: string, queued: readonly string[]) =>
+  getBrowserStore()?.saveQueued(scopeKey, queued) ?? { status: "unavailable", snapshot: null };
+
 export function useSessionDraftState(
   scopeId: string | null | undefined,
   workspaceId: string,
@@ -372,11 +419,22 @@ export function useSessionDraftState(
     () => sessionDraftScopeKey(scopeId, workspaceId, sessionId),
     [scopeId, workspaceId, sessionId],
   );
-  const snapshot = useSyncExternalStore(
+  const serializedSnapshot = useSyncExternalStore(
     subscribeBrowserDraftStore,
-    () => key ? getSessionDraft(scopeId, workspaceId, sessionId) : null,
-    () => null,
+    () => {
+      const current = key ? getSessionDraft(scopeId, workspaceId, sessionId) : null;
+      return current ? JSON.stringify(current) : "";
+    },
+    () => "",
   );
+  const snapshot = useMemo(() => {
+    if (!serializedSnapshot) return null;
+    const parsed: unknown = JSON.parse(serializedSnapshot);
+    if (!isRecord(parsed) || typeof parsed.text !== "string" || !isPromptMode(parsed.mode)) return null;
+    const queued = parseQueued(parsed.queued);
+    const snapshot: SessionDraftSnapshot = { text: parsed.text, mode: parsed.mode };
+    return queued.length > 0 ? { ...snapshot, queued } : snapshot;
+  }, [serializedSnapshot]);
 
   const save = useCallback(
     (nextSnapshot: SessionDraftSnapshot) => saveSessionDraft(scopeId, workspaceId, sessionId, nextSnapshot),
@@ -391,4 +449,14 @@ export function useSessionDraftState(
     () => ({ scopeKey: key, snapshot, save, clear }),
     [clear, key, save, snapshot],
   );
+}
+
+/**
+ * The persisted prompt of a workspace's not-yet-created session. Navigating
+ * to another conversation unmounts the new-task composer, so its text has to
+ * outlive the component to be recoverable; the sidebar reads the same slot to
+ * offer a way back.
+ */
+export function useNewTaskDraftState(scopeId: string | null | undefined, workspaceId: string | null | undefined) {
+  return useSessionDraftState(scopeId, workspaceId ?? "", NEW_TASK_DRAFT_SESSION_ID);
 }

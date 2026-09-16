@@ -1,87 +1,138 @@
 import { expect } from "vitest";
-import { control, createAndSelectWorkspace, evalIn, waitFor } from "@openwork/behaviors";
-import { desktop } from "@openwork/hosts";
-import { needs, test } from "@openwork/testkit";
+import { spec } from "@openwork/testkit";
+import { arrangeControl, unfinishedToolsWeb } from "../worlds/chat.ts";
 
-const e2eTestsEnabled = process.env.OPENWORK_EVAL_E2E_TESTS === "1";
-const title = e2eTestsEnabled
-  ? "unfinished current-turn tools expose active, waiting, and unknown outcomes"
-  : "unfinished tool lifecycle skipped — needs: set OPENWORK_EVAL_E2E_TESTS=1";
+const test = spec.world(unfinishedToolsWeb, {
+  timeout: 420_000,
+  resources: { surfaces: ["appWeb"], services: ["mock"] },
+});
 
-function lifecycleExpression(lifecycle: "running" | "waiting" | "unknown", text: string): string {
-  return `(() => {
-    const rows = Array.from(document.querySelectorAll('[data-tool-lifecycle="${lifecycle}"]'));
-    return rows.some((row) => (row.textContent || '').includes(${JSON.stringify(text)}));
-  })()`;
-}
-
-test.skipIf(!e2eTestsEnabled)(title, async ({ evidence }) => {
-  needs({ optIn: ["OPENWORK_EVAL_E2E_TESTS"] });
-
-  await using app = await desktop({ name: "unfinished-tool-lifecycle" });
-  await createAndSelectWorkspace(app, {
-    path: `/tmp/openwork-unfinished-tool-lifecycle-${Date.now()}`,
+test("STOP-01 unfinished current-turn tools expose Stop feedback and active, waiting, and unknown outcomes", async ({ world, user, seed, probe, step, evidence }) => {
+  await step("a completed turn grounds later Stop errors in the native snapshot", async () => {
+    await user.type("composer", world.warmup.prompt, { replace: true, verify: true });
+    await user.press("Enter");
+    await user.see({ text: world.warmup.reply }, { timeoutMs: 45_000 });
+    await user.reload();
+    await user.see("composer", { editable: true, timeoutMs: 45_000 });
   });
-  await waitFor(
-    app,
-    `window.__openworkControl.listActions().some((action) => action.id === "session.create_task" && !action.disabled)`,
-    { timeoutMs: 30_000, label: "new task control ready" },
-  );
-  let taskCreated = false;
-  let createTaskError: unknown = null;
-  for (let attempt = 0; attempt < 4 && !taskCreated; attempt += 1) {
-    try {
-      await control(app, "session.create_task");
-      taskCreated = true;
-    } catch (error) {
-      createTaskError = error;
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-    }
-  }
-  if (!taskCreated) throw createTaskError;
-  await waitFor(
-    app,
-    `window.__openworkControl.listActions().some((action) => action.id === "eval.session_lifecycle.seed_unfinished_tools" && !action.disabled)`,
-    { timeoutMs: 30_000, label: "unfinished tool lifecycle control ready" },
-  );
 
-  await control(app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "active" });
-  await waitFor(app, lifecycleExpression("running", "Running 1 command, reading 1 file"), {
-    timeoutMs: 15_000,
-    label: "active unfinished tools visibly running",
+  await using stopFault = await world.startStopFault();
+  await step("a real native tool makes the current run stoppable", async () => {
+    await probe.eventually(() => stopFault.read(), {
+      within: 30_000,
+      label: "the completed fixture turn in the session snapshot",
+      until: (value) => value.snapshotMessageCount > 0,
+    });
+    await user.type("composer", world.prompt, { replace: true, verify: true });
+    await user.press("Enter");
+    await probe.eventually(() => world.nativeStatus(), {
+      within: 45_000,
+      label: "the controlled native tool run",
+      until: (value) => value === "busy" || value === "retry",
+    });
+    await user.see({ text: /sleep 120/ }, { timeoutMs: 45_000 });
+    await user.see({ role: "button", label: "Stop" }, { timeoutMs: 45_000 });
   });
-  evidence.recordAssertionEvidence(
-    "Active unfinished tools remain visibly in progress",
-    "The current-turn command and file read rendered with data-tool-lifecycle=running and a present-tense summary.",
-    true,
-  );
 
-  await control(app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "waiting" });
-  await waitFor(app, lifecycleExpression("waiting", "Waiting for your action"), {
-    timeoutMs: 15_000,
-    label: "unfinished tools visibly waiting for action",
+  await step("Stop immediately shows bounded pending feedback without duplicate aborts", async () => {
+    await user.dblclick({ role: "button", label: "Stop" });
+    await user.press("Escape");
+    await user.press("Escape");
+    const pending = await probe.eventually(() => stopFault.read(), {
+      within: 5_000,
+      intervalMs: 20,
+      label: "the held native Stop response and pending feedback",
+      until: (value) => value.attempts === 1 && value.held === 1 && value.elapsedMs !== null,
+    });
+    expect(pending).toMatchObject({
+      attempts: 1,
+      held: 1,
+      nativeStatus: null,
+      nativeFailed: false,
+      clickCaptured: true,
+      trusted: true,
+      expired: false,
+      stoppingVisible: true,
+      stoppingDisabled: true,
+      ariaBusy: "true",
+      spinnerVisible: true,
+      retryEnabled: false,
+      runVisible: false,
+    });
+    expect(pending.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(pending.elapsedMs).toBeLessThan(100);
+    evidence.recordAssertionEvidence(
+      "Stop shows pending UI within 100ms and suppresses duplicate mouse and keyboard attempts",
+      JSON.stringify({ engine: world.engine, ...pending }),
+      true,
+    );
   });
-  expect(await evalIn(app, `document.body.innerText.includes("Choose an option or approve the request to continue.")`)).toBe(true);
-  evidence.recordAssertionEvidence(
-    "A blocked unfinished step says what it needs",
-    "The same tool group changed to data-tool-lifecycle=waiting and displayed an explicit instruction to choose or approve; it no longer used the running lifecycle.",
-    true,
-  );
 
-  await control(app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "idle" });
-  await waitFor(app, lifecycleExpression("unknown", "Status unknown"), {
-    timeoutMs: 15_000,
-    label: "idle unfinished tools visibly status-unknown",
+  await step("a failed Stop shows an error and restores retry without claiming completion", async () => {
+    await stopFault.fail();
+    const failed = await probe.eventually(() => stopFault.read(), {
+      within: 5_000,
+      intervalMs: 20,
+      label: "failed Stop feedback and retry",
+      until: (value) => value.held === 0 && value.retryEnabled && value.errorText.includes("Stop unavailable"),
+    });
+    expect(failed).toMatchObject({
+      attempts: 1,
+      held: 0,
+      nativeStatus: 503,
+      released: true,
+      failed: true,
+      stoppingVisible: false,
+      retryEnabled: true,
+      runVisible: false,
+    });
+    await user.see({ text: /Stop unavailable/ });
+    expect(failed.aggregateText).not.toMatch(/\b(?:Ran command|Read brief\.md)\b/);
+    const nativeStatus = await world.nativeStatus();
+    expect(["busy", "retry"]).toContain(nativeStatus);
+    evidence.recordAssertionEvidence(
+      "A failed Stop remains explicitly retryable and never presents the run as completed",
+      JSON.stringify({ ...failed, nativeRunStatus: nativeStatus }),
+      true,
+    );
   });
-  const terminalState = await evalIn(app, `(() => ({
-    unknown: document.body.innerText.includes("No terminal result was observed. This step may still be running; check the session before retrying."),
-    running: Boolean(document.querySelector('[data-tool-lifecycle="running"]')),
-    waiting: Boolean(document.querySelector('[data-tool-lifecycle="waiting"]')),
-  }))()`);
-  expect(terminalState).toEqual({ unknown: true, running: false, waiting: false });
-  evidence.recordAssertionEvidence(
-    "An idle task never leaves its unfinished current step silently running",
-    "The tool group converged to data-tool-lifecycle=unknown, told the user to check the session before retrying, and exposed neither running nor waiting lifecycle rows.",
-    true,
-  );
+
+  await step("retrying Stop after the failure aborts the native run", async () => {
+    await user.click({ role: "button", label: "Stop" });
+    await probe.eventually(() => world.nativeStatus(), {
+      within: 45_000,
+      label: "the aborted native tool run",
+      until: (value) => value === "idle",
+    });
+    await user.see({ role: "button", label: "Run task" }, { timeoutMs: 15_000 });
+    await user.notSee({ role: "button", label: /^Stop/ });
+    const settled = await stopFault.read();
+    expect(settled).toMatchObject({ attempts: 1, held: 0, released: true, stoppingVisible: false, runVisible: true });
+    evidence.recordAssertionEvidence(
+      "Retrying Stop after a failed attempt aborts the native run and the run is idle before lifecycle seeding",
+      JSON.stringify(settled),
+      true,
+    );
+  });
+
+  // Synthetic lifecycle coverage starts only after native failure recovery is proven.
+  await arrangeControl(seed, world.app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "active" });
+  await step("active unfinished tools remain visibly in progress", async () => {
+    await user.see("Running command, reading 1 file");
+  });
+
+  await arrangeControl(seed, world.app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "waiting" });
+  await step("a blocked unfinished step says what it needs", async () => {
+    await user.see({ text: /Waiting for your action/ });
+    await user.see({ text: "Choose an option or approve the request to continue." });
+    await user.notSee("Running command, reading 1 file");
+  });
+
+  await arrangeControl(seed, world.app, "eval.session_lifecycle.seed_unfinished_tools", { lifecycle: "idle" });
+  await step("idle unfinished tools expose an unknown terminal state", async () => {
+    await user.see({ text: /Status unknown/ });
+    await user.see({ text: "No terminal result was observed. This step may still be running; check the session before retrying." });
+    await user.notSee({ text: /Waiting for your action/ });
+    await user.notSee("Running command, reading 1 file");
+  });
 });

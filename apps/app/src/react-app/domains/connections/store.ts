@@ -1,10 +1,13 @@
 import { useSyncExternalStore } from "react";
 
+import { desktopRestrictionNotice, type DesktopAppRestrictionChecker } from "../../../app/cloud/desktop-app-restrictions";
+
 import { applyEdits, modify, parse, printParseErrorCode } from "jsonc-parser";
 
 import { t } from "../../../i18n";
 import {
   getMcpServerName,
+  isBuiltInOpenWorkExtension,
   MCP_QUICK_CONNECT,
   type McpDirectoryInfo,
 } from "../../../app/constants";
@@ -24,6 +27,7 @@ import {
 } from "../../../app/lib/desktop";
 import { toSessionTransportDirectory } from "../../../app/lib/session-scope";
 import {
+  normalizeMcpServerCommand,
   normalizeMcpSlug,
   parseMcpServersFromContent,
   removeMcpFromConfig,
@@ -109,6 +113,7 @@ export type McpConnectResult =
   | { ok: false; error: string };
 
 export function createConnectionsStore(options: {
+  checkDesktopAppRestriction: DesktopAppRestrictionChecker;
   client: () => Client | null;
   setClient: (value: Client | null) => void;
   projectDir: () => string;
@@ -364,24 +369,46 @@ export function createConnectionsStore(options: {
 
     if (!canTryOpenworkServer || !openworkClient || !openworkWorkspaceId) return null;
 
-    const response = await openworkClient.listMcp(openworkWorkspaceId);
+    let response = await openworkClient.listMcp(openworkWorkspaceId);
+    // Upgrade the enabled bundled helper when a local workspace is opened.
+    // Never enable a disabled entry, rewrite a custom command, or target a remote worker.
+    if (isDesktopRuntime() && options.workspaceType() === "local") {
+      const computer = response.items.find((entry) => entry.name === "computer-use");
+      const config = computer?.config;
+      const command = config?.command;
+      if (config?.type === "local" && config.enabled !== false && Array.isArray(command)
+        && typeof command[0] === "string" && command[0].endsWith("/ComputerUse")
+        && ((command.length === 2 && command[1] === "mcp") || (command.length === 3 && command[1] === "relay"))) {
+        const currentCommand = await resolveDesktopCommand("getComputerUseMcpCommand", false);
+        const bundled = currentCommand && (command[0] === currentCommand[0]
+          || command[0].endsWith("/OpenWork Computer Use.app/Contents/MacOS/ComputerUse"));
+        if (bundled && JSON.stringify(command) !== JSON.stringify(currentCommand)) {
+          const writable = await resolveWritableOpenworkTarget();
+          if (writable.canUseOpenworkServer && writable.openworkClient && writable.openworkWorkspaceId === openworkWorkspaceId
+            && !mcpMutationDenied(true)) {
+            await writable.openworkClient.addMcp(openworkWorkspaceId, { name: "computer-use", config: { ...config, command: currentCommand } });
+            response = await openworkClient.listMcp(openworkWorkspaceId);
+          }
+        }
+      }
+    }
     const next = response.items.map((entry) => ({
       name: entry.name,
-      config: entry.config as McpServerEntry["config"],
+      // The server relays opencode.json entries verbatim; fold a Claude-style
+      // string command into one list before any reader touches it.
+      config: normalizeMcpServerCommand(entry.config as McpServerEntry["config"]),
       source: entry.source,
       managedOAuth: entry.managedOAuth,
     }));
     const engineSync = response.engineSync ?? null;
 
     let nextStatuses: McpStatusMap = {};
-    const activeClient = options.client();
-    if (activeClient && projectDir) {
-      try {
-        const status = unwrap(await activeClient.mcp.status({ directory: projectDir }));
-        nextStatuses = filterConfiguredStatuses(status as McpStatusMap, next);
-      } catch {
-        nextStatuses = {};
-      }
+    // Read through the same workspace mount as configuration. The chat client
+    // can still point at the previous/default workspace during restoration.
+    try {
+      nextStatuses = filterConfiguredStatuses(await openworkClient.getMcpStatus(openworkWorkspaceId), next);
+    } catch {
+      nextStatuses = {};
     }
 
     for (const entry of next) {
@@ -434,7 +461,8 @@ export function createConnectionsStore(options: {
     const mcpResource = extensionResource(entry.extensionManifest, "mcp");
     if (mcpResource?.localCommandRef === "openwork.computerUseMcp") {
       const command = await resolveDesktopCommand("getComputerUseMcpCommand", false);
-      return command ?? entry.command;
+      if (!command) throw new Error("Computer Use requires the bundled OpenWork helper on macOS.");
+      return command;
     }
     if (mcpResource?.localCommandRef === "openwork.uiMcp" || entry.serverName === "openwork-ui") {
       const command = await resolveDesktopCommand("getOpenworkUiMcpCommand");
@@ -518,9 +546,10 @@ export function createConnectionsStore(options: {
           mcpLastUpdatedAt: Date.now(),
           mcpStatuses: projectedStatuses,
           managedOAuthAvailable: serverResult.managedOAuthAvailable,
+          // The Library's own empty state explains an empty server list.
           mcpStatus: failedNames
             ? `Some MCPs could not be registered with the engine: ${failedNames}. They may appear disconnected — try reloading the engine.`
-            : serverResult.next.length ? null : "No MCP servers configured yet.",
+            : null,
         }));
         void healUnhealthyMcpEntries(serverResult.next, projectedStatuses, refreshToken);
         return;
@@ -645,7 +674,7 @@ export function createConnectionsStore(options: {
         mcpServers: next,
         mcpLastUpdatedAt: Date.now(),
         mcpStatuses: projectedStatuses,
-        mcpStatus: next.length ? null : "No MCP servers configured yet.",
+        mcpStatus: null,
       }));
       void healUnhealthyMcpEntries(next, projectedStatuses, refreshToken);
     } catch (error) {
@@ -659,7 +688,31 @@ export function createConnectionsStore(options: {
     }
   }
 
+  function mcpMutationDenied(builtIn: boolean) {
+    const restriction = builtIn ? "allowBuiltInExtensions" : "allowManageExtensions";
+    if (!options.checkDesktopAppRestriction({ restriction })) return null;
+    const message = desktopRestrictionNotice(restriction);
+    setStateField("mcpStatus", message);
+    return message;
+  }
+
+  function builtInMcp(name: string) {
+    return MCP_QUICK_CONNECT.find((entry) =>
+      isBuiltInOpenWorkExtension(entry) && getMcpServerName(entry) === name,
+    );
+  }
+
   async function connectMcp(entry: McpDirectoryInfo): Promise<McpConnectResult> {
+    const builtIn = builtInMcp(getMcpServerName(entry));
+    // Use catalog configuration for built-ins; caller-supplied metadata must
+    // not turn an arbitrary URL or command into an allowed built-in.
+    if (builtIn) entry = builtIn;
+    // Cloud repair uses the signed-in organization's reconciler below, not
+    // caller-supplied MCP configuration. Existing service access stays usable.
+    if (entry.managedBy !== "openwork-connect") {
+      const error = mcpMutationDenied(Boolean(builtIn));
+      if (error) return { ok: false, error };
+    }
     const startedAt = perfNow();
     const openworkSnapshot = getOpenworkSnapshot();
     const isRemoteWorkspace =
@@ -756,7 +809,7 @@ export function createConnectionsStore(options: {
         if (!canUseOpenworkServer || !openworkClient || !openworkWorkspaceId) {
           throw new Error("OpenWork server is required to repair agent access to connected services.");
         }
-        const context = await resolveCloudMcpOperationContext(entry.url);
+        const context = await resolveCloudMcpOperationContext(null);
         if (!context) {
           throw new Error("Sign in to OpenWork Cloud and choose an organization first.");
         }
@@ -879,10 +932,11 @@ export function createConnectionsStore(options: {
       }
 
       if (entryType === "local") {
-        if (!entry.command?.length) {
+        const command = await resolveLocalMcpCommand(entry);
+        if (!command?.length) {
           throw new Error("Missing MCP command.");
         }
-        mcpEntryConfig["command"] = await resolveLocalMcpCommand(entry);
+        mcpEntryConfig["command"] = command;
         const environment = await resolveLocalMcpEnvironment(entry);
         if (environment) {
           mcpEntryConfig["environment"] = environment;
@@ -959,6 +1013,11 @@ export function createConnectionsStore(options: {
                 type: "local" as const,
                 command: (mcpEntryConfig["command"] as string[]) ?? entry.command!,
                 enabled: true,
+                // The hot-add call is what spawns the process on first connect;
+                // the file write above only matters on a later engine start.
+                ...(mcpEntryConfig["environment"]
+                  ? { environment: mcpEntryConfig["environment"] as Record<string, string> }
+                  : {}),
               };
 
         unwrap(
@@ -1206,6 +1265,7 @@ export function createConnectionsStore(options: {
   }
 
   async function removeMcp(name: string) {
+    if (mcpMutationDenied(Boolean(builtInMcp(name)))) return;
     try {
       setStateField("mcpStatus", null);
 
@@ -1277,7 +1337,7 @@ export function createConnectionsStore(options: {
 
     if (disposed) return;
     // Only clear the reloading banner if it's still ours. refreshMcpServers
-    // may have already replaced it with a real message (e.g. "No MCP servers").
+    // may have already replaced it with a real message (e.g. a registration failure).
     if (snapshot.mcpStatus === t("mcp.reloading_status")) {
       setStateField("mcpStatus", null);
     }
@@ -1288,6 +1348,7 @@ export function createConnectionsStore(options: {
   // this never gets called when the server is unavailable. Reload UX comes
   // from the existing reload-required popup; no extra banner here.
   async function setMcpEnabled(name: string, enabled: boolean) {
+    if (mcpMutationDenied(Boolean(builtInMcp(name)))) return;
     try {
       const { openworkClient, openworkWorkspaceId, canUseOpenworkServer } =
         await resolveWritableOpenworkTarget();

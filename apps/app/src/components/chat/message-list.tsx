@@ -1,5 +1,6 @@
 "use memo";
 
+import { VisualizationTool } from "@/components/tools/visualization-tool"
 import * as React from "react"
 import {
   AlertTriangle,
@@ -15,6 +16,7 @@ import {
   Pencil,
   Split,
   Undo2,
+  WifiOff,
 } from "lucide-react"
 import {
   DynamicToolUIPart,
@@ -28,7 +30,10 @@ import { openDesktopUrl, revealDesktopItemInDir } from "@/app/lib/desktop"
 import { isElectronRuntime } from "@/app/lib/runtime-env"
 import { SYNTHETIC_SESSION_ERROR_MESSAGE_PREFIX } from "@/app/types"
 import { t } from "@/i18n"
-import { sessionErrorPresentationFromUIMessage } from "@/react-app/domains/session/sync/session-error"
+import { useOpenTargets } from "@/lib/target-provider"
+import { openTargetFromUrl } from "@/react-app/domains/session/artifacts/open-target"
+import { presentOpencodeSessionError, sessionErrorPresentationFromUIMessage } from "@/react-app/domains/session/sync/session-error"
+import { openModelPickerEvent } from "@/react-app/shell/new-providers-listener"
 import { ApplyPatchTool } from "@/components/tools/apply-patch"
 import { BashTool } from "@/components/tools/bash"
 import { EditTool } from "@/components/tools/edit"
@@ -48,8 +53,8 @@ import { TodoWriteTool } from "@/components/tools/todowrite"
 import { WebfetchTool } from "@/components/tools/webfetch"
 import { WebsearchTool } from "@/components/tools/websearch"
 import { useMessageList, useSessionErrorMessage } from "@/components/chat/message-list-provider"
-import { ArtifactList } from "@/components/chat/artifact"
 import { TaskSuggestions } from "@/components/chat/task-suggestions"
+import { ProgressiveMessageList, type MessageListViewport } from "@/components/chat/progressive-message-list"
 import {
   DescriptiveButtonContent,
   DescriptiveButtonDescription,
@@ -63,12 +68,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu"
+import { ActionContextMenu } from "@/components/ui/action-context-menu"
+import type { MenuAction } from "@/components/ui/action-menu-model"
 import {
   Collapsible,
   CollapsibleContent,
@@ -84,6 +85,8 @@ import {
 } from "@/components/ui/message"
 import { Tool } from "@/components/ui/tool"
 import { CapabilityCallLine } from "@/components/chat/capability-call-line"
+import { CodeModeTool } from "@/components/chat/code-mode-tool"
+import { codeModeToolCalls } from "@/lib/code-mode-tools"
 import { hasPreservedMcpAppResult, McpAppFrame } from "@/components/chat/mcp-app-frame"
 import { ReasoningBlock } from "@/components/chat/reasoning-block"
 import { SubagentRunLine } from "@/components/chat/subagent-run-line"
@@ -104,14 +107,18 @@ import {
   isReadToolPart,
   isSkillToolPart,
   isTaskToolPart,
+  taskChildSessionId,
   isTodoWriteToolPart,
   isWebFetchToolPart,
   isWebSearchToolPart,
   isWriteToolPart,
 } from "@/lib/build-in-tools"
 import type { ThreadStatus } from "@/lib/messages"
-import type { SessionActivityStatus } from "@/react-app/domains/session/status/session-activity-store"
-import { formatToolCallDuration } from "@/lib/tool-call-duration"
+import { useSessionActivityStore, type SessionActivityStatus } from "@/react-app/domains/session/status/session-activity-store"
+import { activeDelegatedTasks, hasNoNewActivity, lastTaskProgressAt } from "@/react-app/domains/session/status/session-progress"
+import { revalidateWorkspaceSessionSync } from "@/react-app/domains/session/sync/session-sync"
+import { useWorkspaceMaybe } from "@/react-app/shell/workspace-provider"
+import { formatElapsedSeconds, formatToolCallDuration } from "@/lib/tool-call-duration"
 import { collectLatestAssistantToolParts } from "@/lib/latest-assistant-tool-parts"
 import { isToolPartInFlight } from "@/lib/tool-activity"
 import { faviconUrlForHref } from "@/lib/favicon"
@@ -126,6 +133,8 @@ const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
 
 /** Above this many step rows a finished turn folds into one summary line. */
 const COLLAPSED_STEP_RUN_MIN_ROWS = 4
+
+const ParentRunActiveContext = React.createContext(true)
 
 function MessageTimestamp({ message, className }: { message: UIMessage; className?: string }) {
   const created = getMessageCreated(message)
@@ -178,8 +187,17 @@ class ToolMessage extends React.Component<ToolMessageProps, { failed: boolean }>
 
 const ToolMessageInner = ({ part }: ToolMessageProps) => {
   const { connectorIdentities, onMcpReconnect, onMcpReopenAuthorization, onMcpRetry } = useMessageList()
+  const parentActive = React.useContext(ParentRunActiveContext)
   const resolveLifecycle = useCurrentToolLifecycleResolver()
   const lifecycle = resolveLifecycle(part.toolCallId, isToolPartInFlight(part))
+
+  // Delegated work has its own lifecycle, even after a parent follow-up/error.
+  if (isTaskToolPart(part)) return <SubagentRunLine part={part} parentActive={parentActive} />
+
+  if (part.type === "dynamic-tool") {
+    const calls = codeModeToolCalls(part)
+    if (calls) return <CodeModeTool part={part} calls={calls} lifecycle={lifecycle} connectors={connectorIdentities} />
+  }
 
   if (lifecycle === "waiting") {
     return (
@@ -211,6 +229,10 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
         </div>
       </div>
     )
+  }
+
+  if (part.type === "dynamic-tool" && part.toolName === "openwork_visualization") {
+    return <VisualizationTool part={part} />
   }
 
   if (isBashToolPart(part)) {
@@ -277,10 +299,6 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
     return <OpenWorkAutomationProposalTool part={part} />
   }
 
-  if (isTaskToolPart(part)) {
-    return <SubagentRunLine part={part} />
-  }
-
   // Failed calls use the same sentence line with the "failures are
   // instructions" treatment (inline Reconnect/Retry).
   if (part.type === "dynamic-tool") {
@@ -288,7 +306,7 @@ const ToolMessageInner = ({ part }: ToolMessageProps) => {
       <CapabilityCallLine
         part={part}
         connector={resolveConnectorToolIdentity(part, connectorIdentities)}
-        onReconnect={onMcpReconnect}
+        onReconnect={hasPreservedMcpAppResult(part) ? undefined : onMcpReconnect}
         onReopenAuthorization={onMcpReopenAuthorization}
         onRetry={onMcpRetry}
       />
@@ -515,6 +533,7 @@ const AssistantMessage = React.memo(
               return (
                 <ReasoningBlock
                   key={`reasoning-${index}`}
+                  disclosureKey={JSON.stringify(["reasoning", message.id, index])}
                   text={group.text}
                   isStreaming={group.isStreaming}
                 />
@@ -532,7 +551,7 @@ const AssistantMessage = React.memo(
             if (group.kind === "tool-aggregate") {
               return (
                 <div key={`tool-aggregate-${index}`} className="w-full">
-                  <ToolAggregateGroup parts={group.parts} thoughts={group.thoughts} />
+                  <ToolAggregateGroup messageId={message.id} parts={group.parts} thoughts={group.thoughts} />
                 </div>
               )
             }
@@ -667,13 +686,32 @@ function renderUserTextWithSkillChips(text: string, highlightQuery: string | und
 
 const UserMessage = React.memo(
   ({ message, isStreaming }: UserMessageProps) => {
-    const { onRevertToUserMessage, onForkAtMessage, onEditUserMessage, highlightQuery } = useMessageList()
+    const { onRevertToUserMessage, onForkAtMessage, forkingMessageId, onEditUserMessage, highlightQuery, readOnly } = useMessageList()
+    const branching = forkingMessageId === message.id
+    const { onOpenTarget } = useOpenTargets()
+    const openLink = (event: React.MouseEvent) => {
+      if (!onOpenTarget || !(event.target instanceof Element)) return
+      const link = event.target.closest("a[href]")
+      const target = openTargetFromUrl(link?.getAttribute("href") ?? "")
+      if (!target) return
+      event.preventDefault()
+      onOpenTarget(target)
+    }
     const messageText = React.useMemo(() => getMessagesText([message]), [message])
     const inlineParts = React.useMemo(
       () => message.parts.filter((part) => (part.type === "text" && Boolean(part.text)) || isFileUIPart(part)),
       [message.parts],
     )
     const hasContent = inlineParts.length > 0
+    const menuActions: MenuAction[] = []
+    if (messageText) menuActions.push(
+      { type: "item", id: "edit", label: "Edit message", icon: <Pencil className="size-4" />, disabled: readOnly, onSelect: () => onEditUserMessage(message.id, messageText) },
+      { type: "item", id: "copy", label: "Copy", icon: <Copy className="size-4" />, onSelect: () => navigator.clipboard.writeText(messageText) },
+    )
+    menuActions.push(
+      { type: "item", id: "branch", label: branching ? "Branching..." : "Branch in new chat", icon: <Split className="size-4 rotate-90" />, disabled: Boolean(forkingMessageId), onSelect: () => onForkAtMessage(message.id) },
+      { type: "item", id: "revert", label: "Revert", icon: <Undo2 className="size-4" />, disabled: readOnly, onSelect: () => onRevertToUserMessage(message.id) },
+    )
 
     return (
       <Message
@@ -681,8 +719,10 @@ const UserMessage = React.memo(
         data-message-id={message.id}
         data-message-role={message.role}
       >
-        <ContextMenu>
-          <ContextMenuTrigger
+          <ActionContextMenu
+            tabIndex={0}
+            actions={menuActions}
+            contentClassName="w-56"
             // Override Trigger's select-none so user bubbles stay copyable.
             className="!select-text"
             render={
@@ -694,6 +734,7 @@ const UserMessage = React.memo(
                   <MessageContent
                     className="bg-muted text-foreground max-w-[85%] rounded-3xl px-4 py-2.5 leading-6 sm:max-w-[75%] !select-text not-prose"
                     style={{ userSelect: "text" }}
+                    onClick={openLink}
                   >
                     {inlineParts.map((part, index) => {
                       if (part.type === "text") {
@@ -704,9 +745,16 @@ const UserMessage = React.memo(
                         )
                       }
                       if (isFileUIPart(part)) {
+                        // An attachment is identified by its position among the
+                        // message's files, not by its URL or filename: a sent image
+                        // first shows the composer's blob: preview, then the server's
+                        // recompressed data: copy. Keeping one element lets the
+                        // browser swap the bitmap in place instead of remounting an
+                        // <img> that has to decode before it can paint.
+                        const attachmentIndex = inlineParts.slice(0, index).filter(isFileUIPart).length
                         return (
                           <span
-                            key={`file-${part.url}-${index}`}
+                            key={`file-${attachmentIndex}`}
                             className="mx-1 inline-flex align-middle not-prose"
                           >
                             <FileMessage part={part} tone="user" />
@@ -720,7 +768,8 @@ const UserMessage = React.memo(
                 {!isStreaming && (
                   <MessageActions
                     className={cn(
-                      "flex items-center gap-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100"
+                      "flex items-center gap-0 transition-opacity duration-150 group-hover:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100",
+                      branching ? "opacity-100" : "opacity-0"
                     )}
                   >
                     <MessageTimestamp message={message} className="mr-1.5" />
@@ -731,27 +780,32 @@ const UserMessage = React.memo(
                           variant="ghost"
                           size="icon"
                           aria-label="Edit message"
+                          disabled={readOnly}
                           onClick={() => onEditUserMessage(message.id, messageText)}
                         >
                           <Pencil />
                         </Button>
                       </MessageAction>
                     ) : null}
-                    <MessageAction tooltip="Branch in new chat">
+                    <MessageAction tooltip={branching ? "Branching..." : "Branch in new chat"}>
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label="Branch in new chat"
+                        aria-label={branching ? "Branching..." : "Branch in new chat"}
+                        aria-busy={branching || undefined}
+                        disabled={Boolean(forkingMessageId)}
                         onClick={() => onForkAtMessage(message.id)}
                       >
-                        <Split className="rotate-90" />
+                        {branching ? <LoaderCircle className="motion-safe:animate-spin" /> : <Split className="rotate-90" />}
                       </Button>
                     </MessageAction>
+                    {branching ? <span role="status" className="sr-only">Branching...</span> : null}
                     <MessageAction tooltip="Revert">
                       <Button
                         variant="ghost"
                         size="icon"
                         aria-label="Revert"
+                        disabled={readOnly}
                         onClick={() => onRevertToUserMessage(message.id)}
                       >
                         <Undo2 />
@@ -762,29 +816,6 @@ const UserMessage = React.memo(
               </div>
             }
           />
-          <ContextMenuContent className="w-56">
-            {messageText ? (
-              <ContextMenuItem onClick={() => onEditUserMessage(message.id, messageText)}>
-                <Pencil className="size-4" />
-                Edit message
-              </ContextMenuItem>
-            ) : null}
-            {messageText ? (
-              <ContextMenuItem onClick={() => void navigator.clipboard.writeText(messageText)}>
-                <Copy className="size-4" />
-                Copy
-              </ContextMenuItem>
-            ) : null}
-            <ContextMenuItem onClick={() => onForkAtMessage(message.id)}>
-              <Split className="size-4 rotate-90" />
-              Branch in new chat
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onRevertToUserMessage(message.id)}>
-              <Undo2 className="size-4" />
-              Revert
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenu>
       </Message>
     )
   }
@@ -807,7 +838,12 @@ const MessageComponent = React.memo(
       return (
         <ErrorMessage
           error={getMessagesText([message]) || "Session failed"}
+          description={presentation?.description}
+          showDescriptionOnResume={presentation?.kind === "provider-incomplete"}
           resumePrompt={presentation?.recoveryPrompt}
+          technicalDetails={presentation?.technicalDetails}
+          gatewayConnectUrl={presentation?.kind === "gateway-auth-required" ? presentation.connectUrl ?? null : undefined}
+          gatewaySelectionRequired={presentation?.kind === "gateway-selection-required"}
         />
       )
     }
@@ -839,30 +875,160 @@ const MessageComponent = React.memo(
 
 MessageComponent.displayName = "MessageComponent"
 
-const LoadingMessage = React.memo(({ elapsedSeconds }: { elapsedSeconds: number }) => (
+const LoadingMessage = React.memo(({ elapsedSeconds, starting }: { elapsedSeconds: number; starting: boolean }) => (
     <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
-      <div data-loading-message="working" className="py-1 text-sm text-muted-foreground">
-        <span className="ow-text-shimmer tabular-nums">Working {elapsedSeconds}s</span>
+      <div role={starting ? "status" : undefined} data-loading-message={starting ? "starting" : "working"} className="py-1 text-sm text-muted-foreground">
+        <span className="ow-text-shimmer tabular-nums">{starting ? "Starting…" : `Working ${formatElapsedSeconds(elapsedSeconds)}`}</span>
       </div>
     </Message>
 ))
 
 LoadingMessage.displayName = "LoadingMessage"
 
-interface ErrorMessageProps {
-  error: string | null
-  /** Set only for interrupted runs (aborted / provider timeout) that can resume. */
-  resumePrompt?: string | null
+// Show when the run was last validated once the gap is long enough to matter;
+// a short blip needs no timestamp archaeology.
+const RECONNECTING_LAST_CONFIRMED_AFTER_MS = 120_000
+
+export function reconnectingLastConfirmedLabel(
+  lastConfirmedAt: number | null,
+  now: number,
+): string | null {
+  if (lastConfirmedAt === null) return null
+  if (now - lastConfirmedAt < RECONNECTING_LAST_CONFIRMED_AFTER_MS) return null
+  return new Date(lastConfirmedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
 }
 
-function ErrorMessage({ error, resumePrompt }: ErrorMessageProps) {
-  const { onResumeInterrupted } = useMessageList()
+/**
+ * The honest replacement for the ticking "Working" row while a live run can
+ * no longer be validated: the engine may still be working, but nothing has
+ * confirmed it recently, so the timer stops instead of counting unverified
+ * time. Recovery is automatic — the sync layer keeps revalidating and the
+ * row settles from authoritative status, never from elapsed time.
+ */
+const ReconnectingMessage = React.memo(({ lastConfirmedAt }: { lastConfirmedAt: number | null }) => {
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    // The health store stops changing once its failure counter caps, so keep
+    // a slow local tick to let the "last update" hint appear over time.
+    const interval = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(interval)
+  }, [])
+  const lastConfirmedLabel = reconnectingLastConfirmedLabel(lastConfirmedAt, now)
+  return (
+    <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
+      <div
+        data-loading-message="reconnecting"
+        className="flex min-w-0 items-center gap-2 py-1 text-sm text-muted-foreground"
+      >
+        <WifiOff aria-hidden="true" className="size-4 shrink-0" />
+        <span className="min-w-0 truncate">
+          Connection lost — reconnecting…
+          {lastConfirmedLabel ? ` · last update ${lastConfirmedLabel}` : ""}
+        </span>
+      </div>
+    </Message>
+  )
+})
+
+ReconnectingMessage.displayName = "ReconnectingMessage"
+
+interface ErrorMessageProps {
+  error: string | null
+  description?: string | null
+  /** Keep safety guidance visible without expanding ordinary interruption rows. */
+  showDescriptionOnResume?: boolean
+  /** Set only for interrupted runs that can resume. */
+  resumePrompt?: string | null
+  /** Error type, status, provider, code, response body — for bug reports and support. */
+  technicalDetails?: string | null
+  /**
+   * Set (possibly null) only when the OpenWork Gateway rejected the request
+   * because the member must sign in: a URL opens the grant in the browser,
+   * null deep-links to Settings > AI providers instead.
+   */
+  gatewayConnectUrl?: string | null
+  gatewaySelectionRequired?: boolean
+}
+
+/**
+ * Details are worth a disclosure only when they say more than the card
+ * already does. A bare string error yields "Message: <same text>", which
+ * would open to nothing new.
+ */
+function hasExtraTechnicalDetails(error: string | null, details: string | null | undefined): details is string {
+  const text = details?.trim()
+  if (!text) return false
+  if (text === error?.trim()) return false
+  return text.replace(/^Message:\s*/, "") !== error?.trim()
+}
+
+function SessionErrorTechnicalDetails({ details, tone }: { details: string; tone: "card" | "line" }) {
+  const [open, setOpen] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
+  const onCopy = React.useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(details)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // ignore clipboard failures
+    }
+  }, [details])
+
+  return (
+    <div className={cn("flex min-w-0 w-full flex-col", tone === "card" && "border-t border-destructive/20 pt-1.5")}>
+      <button
+        type="button"
+        data-testid="session-error-details-toggle"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-fit min-w-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn("size-3 shrink-0 transition-transform duration-150", open && "rotate-90")}
+        />
+        <span className="shrink-0">Technical details</span>
+      </button>
+      {open ? (
+        <div
+          data-testid="session-error-details"
+          className="mt-1.5 flex min-w-0 flex-col gap-1.5 rounded-lg bg-muted p-2 text-xs"
+        >
+          <pre className="max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word font-mono text-foreground/90">
+            {details}
+          </pre>
+          <button
+            type="button"
+            onClick={() => void onCopy()}
+            className="flex w-fit cursor-pointer items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {copied ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
+            {copied ? "Copied" : "Copy details"}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function ErrorMessage({ error, description, showDescriptionOnResume, resumePrompt, technicalDetails, gatewayConnectUrl, gatewaySelectionRequired }: ErrorMessageProps) {
+  const { onResumeInterrupted, developerMode, dispatchAction, sessionId } = useMessageList()
+  const selection = error?.includes("gateway_selection_required") ? presentOpencodeSessionError(error) : null
+  const displayError = selection?.title ?? error
+  const displayDescription = selection?.description ?? description
+  const displayDetails = selection?.technicalDetails ?? technicalDetails
+  // Status codes, provider names, and response bodies are for developers,
+  // admins, and support — not the plain-language card end users see. They
+  // surface only with Developer mode (Settings → Advanced), like the
+  // session debug panel.
+  const details = developerMode && hasExtraTechnicalDetails(displayError, displayDetails) ? displayDetails : null
 
   // A resumable interruption is a pause, not a failure: it renders as a
   // quiet status line (like "Working 12s"), with Resume as the emphasis.
   if (resumePrompt && onResumeInterrupted) {
     return (
-      <Message className="not-prose mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
+      <Message className="not-prose mx-auto flex w-full max-w-3xl flex-col items-start gap-1 px-2 md:px-10">
         <div
           data-testid="session-error-interrupted"
           className="flex min-w-0 items-center gap-2 py-1 text-sm text-muted-foreground"
@@ -879,6 +1045,12 @@ function ErrorMessage({ error, resumePrompt }: ErrorMessageProps) {
             {t("session.resume_interrupted")}
           </button>
         </div>
+        {showDescriptionOnResume && description ? (
+          <p data-testid="session-error-interruption-warning" className="text-sm text-muted-foreground whitespace-pre-wrap">
+            {description}
+          </p>
+        ) : null}
+        {details ? <SessionErrorTechnicalDetails details={details} tone="line" /> : null}
       </Message>
     )
   }
@@ -889,8 +1061,33 @@ function ErrorMessage({ error, resumePrompt }: ErrorMessageProps) {
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
           <div className="flex flex-row items-start gap-2">
             <AlertTriangle aria-hidden="true" size={16} className="mt-0.5 shrink-0 text-destructive" />
-            <p className="whitespace-pre-wrap text-destructive">{error}</p>
+            <div className="flex flex-col gap-1">
+              <p className="whitespace-pre-wrap text-destructive">{displayError}</p>
+              {displayDescription && (!resumePrompt || showDescriptionOnResume) ? (
+                <p className="text-sm text-destructive/80 whitespace-pre-wrap">{displayDescription}</p>
+              ) : null}
+            </div>
           </div>
+          {details ? <SessionErrorTechnicalDetails details={details} tone="card" /> : null}
+          {gatewaySelectionRequired || selection ? (
+            <Button variant="outline" size="sm" className="self-start" data-testid="session-error-gateway-selection"
+              onClick={() => window.dispatchEvent(new CustomEvent(openModelPickerEvent, { detail: { sessionId, initialTab: "available" } }))}>
+              Choose group and credential set
+            </Button>
+          ) : null}
+          {gatewayConnectUrl !== undefined ? (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="session-error-gateway-connect"
+              className="self-start"
+              onClick={() => {
+                dispatchAction({ target: "settings", action: "open", section: "providers" })
+              }}
+            >
+              Connect
+            </Button>
+          ) : null}
         </div>
       </div>
     </Message>
@@ -901,13 +1098,13 @@ interface RetryMessageProps {
   status: RetryStatus
 }
 
-function RetryActionButton(props: { link: string; label: string }) {
+function RetryActionButton(props: { label: string; onClick: () => void }) {
   return (
     <Button
       variant="outline"
       size="sm"
       className="h-7 border-amber-500/70 bg-amber-50 text-xs text-amber-950 hover:bg-amber-100"
-      onClick={() => void openDesktopUrl(props.link)}
+      onClick={props.onClick}
     >
       {props.label}
     </Button>
@@ -915,6 +1112,7 @@ function RetryActionButton(props: { link: string; label: string }) {
 }
 
 const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
+  const { dispatchAction } = useMessageList()
   const [seconds, setSeconds] = React.useState(() => retryDelaySeconds(status))
 
   React.useEffect(() => {
@@ -934,6 +1132,7 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
     ? `Retrying in ${seconds}s · attempt ${status.attempt}`
     : `Retrying · attempt ${status.attempt}`
   const action = status.action
+  const freeModelLimit = action?.reason === "free_tier_limit"
 
   return (
     <Message className="not-prose mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-0 md:px-10">
@@ -942,16 +1141,29 @@ const RetryMessage = React.memo(({ status }: RetryMessageProps) => {
           <div className="flex items-start gap-2">
             <LoaderCircle size={16} className="mt-0.5 shrink-0 animate-spin text-amber-700" />
             <div className="min-w-0 space-y-1">
-              <p className="whitespace-pre-wrap text-sm font-medium text-amber-900">{status.message}</p>
+              <p className="whitespace-pre-wrap text-sm font-medium text-amber-900">
+                {freeModelLimit ? "The free starter model is busy right now" : status.message}
+              </p>
               <p className="text-xs text-amber-800">{info}</p>
             </div>
           </div>
           {action ? (
             <div className="ml-6 space-y-1 border-t border-amber-400/60 pt-2">
-              <p className="text-xs font-medium text-amber-950">{action.title}</p>
-              <p className="text-xs text-amber-900">{action.message}</p>
-              {action.link ? (
-                <RetryActionButton link={action.link} label={action.label} />
+              <p className="text-xs font-medium text-amber-950">
+                {freeModelLimit ? "Free model limit reached" : action.title}
+              </p>
+              <p className="text-xs text-amber-900">
+                {freeModelLimit
+                  ? "OpenWork will keep retrying. To keep working now, connect your own model provider."
+                  : action.message}
+              </p>
+              {freeModelLimit ? (
+                <RetryActionButton
+                  label="Connect a model provider"
+                  onClick={() => dispatchAction({ target: "settings", action: "open", section: "providers" })}
+                />
+              ) : action.link ? (
+                <RetryActionButton label={action.label} onClick={openDesktopUrl.bind(null, action.link)} />
               ) : null}
             </div>
           ) : null}
@@ -1040,7 +1252,7 @@ function MessageGroup({
   isLastGroup,
   isStreaming,
 }: AssistantMessageGroupProps) {
-  const { onRevertToUserMessage, onForkAtMessage, showThinking } = useMessageList()
+  const { onRevertToUserMessage, onForkAtMessage, forkingMessageId, showThinking, readOnly } = useMessageList()
   const lastItem = items[items.length - 1]
   // Branch/revert must target a real server-side message id. Synthetic
   // client-side messages (e.g. session errors) don't exist on the server and
@@ -1088,7 +1300,7 @@ function MessageGroup({
     item.message.role === "assistant" && !isSessionErrorMessage(item.message)
       ? getAssistantRenderGroups(item.message.parts, showThinking).flatMap((group, groupIndex) =>
         group.kind === "reasoning"
-          ? [{ key: `${item.message.id}-${groupIndex}`, text: group.text, isStreaming: group.isStreaming }]
+          ? [{ key: JSON.stringify(["reasoning", item.message.id, groupIndex]), text: group.text, isStreaming: group.isStreaming }]
           : []
       )
       : []
@@ -1122,7 +1334,7 @@ function MessageGroup({
         key={`folded-reasoning-${reasoning.key}`}
         className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10"
       >
-        <ReasoningBlock text={reasoning.text} isStreaming={reasoning.isStreaming} />
+        <ReasoningBlock disclosureKey={reasoning.key} text={reasoning.text} isStreaming={reasoning.isStreaming} />
       </Message>
     ))
     : []
@@ -1154,7 +1366,7 @@ function MessageGroup({
       nodes.push(
         <div key={`aggregate-${run.key}`}>
           <Message className="mx-auto flex w-full max-w-3xl flex-col items-start gap-2 px-2 md:px-10">
-            <ToolAggregateGroup parts={run.parts} className="w-full" />
+            <ToolAggregateGroup messageId={run.key} parts={run.parts} className="w-full" />
           </Message>
         </div>
       )
@@ -1206,32 +1418,31 @@ function MessageGroup({
         </Message>
       ))}
       {renderItems(proseItems, stepItems.length, collapseSteps)}
-      {/* Paper artifact strip: one FILES row per turn, at the end. */}
-      <ArtifactList
-        messages={items.map((item) => item.message)}
-        includeTargetFallbacks={false}
-      />
       {lastTextMessage && !isStreaming && (
-        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 opacity-0 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100 md:px-8">
+        <div className={cn("mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-2 transition-opacity duration-150 group-hover/message-group:opacity-100 max-lg:opacity-100 pointer-coarse:opacity-100 md:px-8", forkingMessageId && forkingMessageId === lastRealItem?.message.id ? "opacity-100" : "opacity-0")}>
           <MessageActions className="flex gap-0">
             <CopyMessageButton messages={renderableItems.map((item) => item.message)} />
             {lastRealItem ? (
               <>
-                <MessageAction tooltip="Branch in new chat">
+                <MessageAction tooltip={forkingMessageId === lastRealItem.message.id ? "Branching..." : "Branch in new chat"}>
                   <Button
                     variant="ghost"
                     size="icon"
-                    aria-label="Branch in new chat"
+                    aria-label={forkingMessageId === lastRealItem.message.id ? "Branching..." : "Branch in new chat"}
+                    aria-busy={forkingMessageId === lastRealItem.message.id || undefined}
+                    disabled={Boolean(forkingMessageId)}
                     onClick={() => onForkAtMessage(lastRealItem.message.id)}
                   >
-                    <Split className="rotate-90" />
+                    {forkingMessageId === lastRealItem.message.id ? <LoaderCircle className="motion-safe:animate-spin" /> : <Split className="rotate-90" />}
                   </Button>
                 </MessageAction>
+                {forkingMessageId === lastRealItem.message.id ? <span role="status" className="sr-only">Branching...</span> : null}
                 <MessageAction tooltip="Revert">
                   <Button
                     variant="ghost"
                     size="icon"
                     aria-label="Revert"
+                    disabled={readOnly}
                     onClick={() => onRevertToUserMessage(lastRealItem.message.id)}
                   >
                     <Undo2 />
@@ -1269,19 +1480,27 @@ type StandaloneMessageProps = {
 }
 
 const StandaloneMessage = React.memo(function StandaloneMessage(props: StandaloneMessageProps) {
-  return (
-    <div>
-      <MessageComponent {...props} />
-      <ArtifactList messages={[props.message]} includeTargetFallbacks={false} />
-    </div>
-  )
+  return <MessageComponent {...props} />
 })
+
+/**
+ * Liveness of the run behind this transcript, derived from the workspace
+ * sync layer's continuous status revalidation. While `degraded` is true the
+ * busy state cannot be confirmed, so working indicators must stop ticking.
+ */
+export interface RunSyncHealth {
+  degraded: boolean
+  lastConfirmedAt: number | null
+}
 
 interface MessageListProps {
   messages: UIMessage[]
+  messageIdReplacements?: ReadonlyMap<string, string>
   status: ThreadStatus
   activityStatus: SessionActivityStatus
   retryStatus?: RetryStatus | null
+  syncHealth?: RunSyncHealth
+  viewport?: MessageListViewport
 }
 
 export function shouldShowMessageListLoading(
@@ -1293,9 +1512,31 @@ export function shouldShowMessageListLoading(
   return status === "streaming" || (status === "submitted" && messageCount > 0)
 }
 
-export function MessageList({ messages, status, activityStatus, retryStatus }: MessageListProps) {
+export function shouldShowRunReconnecting(status: ThreadStatus, syncDegraded: boolean) {
+  if (!syncDegraded) return false
+  return status === "submitted" || status === "streaming" || status === "retrying"
+}
+
+export function MessageList({ messages, messageIdReplacements, status, activityStatus, retryStatus, syncHealth, viewport }: MessageListProps) {
+  const { workspaceId, sessionId } = useMessageList()
+  const workspace = useWorkspaceMaybe()
+  const tasks = React.useMemo(() => activeDelegatedTasks(messages), [messages])
+  const [observedAt] = React.useState(() => Date.now())
+  const lastProgressAt = useSessionActivityStore((state) => {
+    const records = state.recordsByWorkspaceId[workspaceId]
+    const own = records?.[sessionId]
+    return lastTaskProgressAt(Math.max(own?.runStartedAt || observedAt, own?.lastProgressAt ?? 0), tasks, records)
+  })
+  const childBlocked = useSessionActivityStore((state) => tasks.some((part) => {
+    const id = taskChildSessionId(part)
+    const child = id ? state.recordsByWorkspaceId[workspaceId]?.[id] : undefined
+    return (child?.waitingPermissionIds.length ?? 0) > 0 || (child?.waitingQuestionIds.length ?? 0) > 0
+      || child?.compacting || child?.retrying
+  }))
   const isStreaming = status === "streaming" || status === "retrying"
-  const runActive = status === "submitted" || status === "streaming" || status === "retrying"
+  const runActive = status === "streaming" || status === "retrying"
+  const syncDegraded = syncHealth?.degraded === true
+  const activityActive = runActive || tasks.length > 0
   const runStartedAtRef = React.useRef<number | null>(null)
   const [runElapsedSeconds, setRunElapsedSeconds] = React.useState(0)
   // Anchor the counter to the user message that started the run (server
@@ -1311,13 +1552,18 @@ export function MessageList({ messages, status, activityStatus, retryStatus }: M
     return null
   }, [messages, runActive])
   React.useEffect(() => {
-    if (!runActive) {
+    if (!activityActive) {
       runStartedAtRef.current = null
       setRunElapsedSeconds(0)
       return
     }
     if (runStartedAt !== null) runStartedAtRef.current = runStartedAt
     else if (runStartedAtRef.current === null) runStartedAtRef.current = Date.now()
+    // While liveness is unconfirmed the counter must not tick: elapsed time
+    // is only presented as work while something is validating that work is
+    // still happening. The anchor is kept, so a confirmed recovery resumes
+    // the true task age instead of restarting at zero.
+    if (syncDegraded) return
     const updateElapsed = () => {
       const startedAt = runStartedAtRef.current
       if (startedAt !== null) setRunElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))
@@ -1325,7 +1571,7 @@ export function MessageList({ messages, status, activityStatus, retryStatus }: M
     updateElapsed()
     const interval = window.setInterval(updateElapsed, 1000)
     return () => window.clearInterval(interval)
-  }, [runActive, runStartedAt])
+  }, [activityActive, runStartedAt, syncDegraded])
   const items = React.useMemo(() => groupMessages(messages, status), [messages, status]);
   const error = useSessionErrorMessage();
   const hasSessionErrorMessage = React.useMemo(() => messages.some(isSessionErrorMessage), [messages])
@@ -1333,22 +1579,42 @@ export function MessageList({ messages, status, activityStatus, retryStatus }: M
     () => collectLatestAssistantToolParts(messages),
     [messages],
   )
-  const hasVisibleToolActivity = latestAssistantToolParts.some(isToolPartInFlight)
-  const showLoading = shouldShowMessageListLoading(status, messages.length, hasVisibleToolActivity)
+  // Delegated task rows may be above newer messages; keep the run footer visible.
+  const hasVisibleToolActivity = latestAssistantToolParts.some((part) => !isTaskToolPart(part) && isToolPartInFlight(part))
+  const waiting = activityStatus === "waiting" || activityStatus === "compacting" || childBlocked
+  const showReconnecting = !waiting && !retryStatus && shouldShowRunReconnecting(status, syncDegraded)
+  const noNewActivity = hasNoNewActivity({
+    active: activityActive && activityStatus !== "error", waiting, retrying: status === "retrying" || Boolean(retryStatus),
+    disconnected: syncDegraded, lastProgressAt, now: Date.now(),
+  })
+  const showLoading = !waiting && !noNewActivity && !showReconnecting
+    && shouldShowMessageListLoading(status, messages.length, hasVisibleToolActivity)
+  const baseUrl = workspace?.opencodeBaseUrl
+  React.useEffect(() => {
+    if (!noNewActivity || !baseUrl) return
+    // Revalidate existing state only. Silence never aborts or resubmits work.
+    void revalidateWorkspaceSessionSync({ workspaceId, baseUrl })
+  }, [noNewActivity, workspaceId, sessionId, baseUrl])
   const currentToolCallIds = React.useMemo(
     () => new Set(latestAssistantToolParts.map((part) => part.toolCallId)),
     [latestAssistantToolParts],
   )
 
   return (
+    <ParentRunActiveContext.Provider value={runActive}>
     <CurrentToolLifecycleProvider
       activityStatus={activityStatus}
       currentToolCallIds={currentToolCallIds}
     >
-      <div className={cn("flex flex-col gap-2 @container/message-list")}>
-        {messages.length === 0 && <TaskSuggestions className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3 md:px-5 md:pb-5 grow" />}
-
-        {items.map((item) => {
+      <ProgressiveMessageList
+        groups={items}
+        groupKeyReplacements={messageIdReplacements}
+        viewport={viewport}
+        className="@container/message-list"
+        getGroupKey={(item) => isMessageGroup(item) ? item.messages[0]?.message.id ?? "empty-assistant-group" : item.message.id}
+        getMessageIds={(item) => isMessageGroup(item) ? item.messages.flatMap(({ message }) => [message.id, `${message.id}:steps`]) : [item.message.id]}
+        header={messages.length === 0 && <TaskSuggestions className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3 md:px-5 md:pb-5 grow" />}
+        renderGroup={(item) => {
         if (isMessageGroup(item)) {
           return (
             <MemoizedMessageGroup
@@ -1373,12 +1639,14 @@ export function MessageList({ messages, status, activityStatus, retryStatus }: M
             isLastStep={isLastStep}
           />
         )
-        })}
-
-        {showLoading && <LoadingMessage elapsedSeconds={runElapsedSeconds} />}
+        }}
+      >
+        {showLoading && <LoadingMessage elapsedSeconds={runElapsedSeconds} starting={status === "submitted"} />}
+        {showReconnecting && <ReconnectingMessage lastConfirmedAt={syncHealth?.lastConfirmedAt ?? null} />}
         {retryStatus ? <RetryMessage status={retryStatus} /> : null}
         {error && !hasSessionErrorMessage ? <ErrorMessage error={error} /> : null}
-      </div>
+      </ProgressiveMessageList>
     </CurrentToolLifecycleProvider>
+    </ParentRunActiveContext.Provider>
   )
 }

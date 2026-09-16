@@ -1,11 +1,11 @@
+import { ComputerUseControls } from "../domains/session/surface/computer-use-controls";
 /** @jsxImportSource react */
 
-import { useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 
 import { captureAnalyticsEvent, initAnalytics } from "../../app/lib/analytics";
 import {
-  createDenClient,
   readDenBootstrapConfig,
   readDenSettings,
   setDenBootstrapConfig,
@@ -15,17 +15,22 @@ import {
   denSettingsChangedEvent,
   denSessionUpdatedEvent,
 } from "../../app/lib/den-session-events";
-import { evalRelaunchDesktopApp } from "../../app/lib/desktop";
+import { evalRelaunchDesktopApp, readDesktopDistributionInfo } from "../../app/lib/desktop";
+import { outboundEgressAllowed } from "../../app/lib/enterprise-activation";
+import { isDesktopRuntime } from "../../app/lib/runtime-env";
 import { Button } from "../../components/ui/button";
 import { t } from "../../i18n";
 import { useDenAuth } from "../domains/cloud/den-auth-provider";
+import { useDesktopConfig } from "../domains/cloud/desktop-config-provider";
 import {
   clearCloudInventoryCache,
   prefetchCloudInventory,
 } from "../domains/connections/cloud-inventory-cache";
 import { ForcedSigninPage } from "../domains/cloud/forced-signin-page";
 import { EnterpriseActivationGate } from "../domains/cloud/enterprise-activation-gate";
+import { OpenWorkWebAccessGate } from "../domains/cloud/openwork-web-access-gate";
 import { OrgOnboardingPage } from "../domains/cloud/org-onboarding-page";
+import { ChatDeepLinkListener } from "./chat-deep-link-listener";
 import { NewProvidersListener } from "./new-providers-listener";
 import { useDesktopFontZoomBehavior } from "./font-zoom";
 import { LoadingOverlay } from "./loading-overlay";
@@ -42,11 +47,13 @@ import {
 } from "./control/control-provider";
 import { OpenworkContextPublisher } from "./openwork-context-publisher";
 import { SessionRoute } from "./session-route";
+import { DesktopUpdaterProvider } from "../domains/settings/state/desktop-updater-provider";
 import { SettingsRoute } from "./settings-route";
 import { ShellConfigProvider } from "./shell-config";
 import { WelcomeRoute } from "./welcome-route";
 import { readOrgSelectionPending } from "../../app/lib/den-sign-in-intent";
 import { signedInRoute } from "./den-signin-routing";
+import { StartupScreen } from "./startup-screen";
 
 
 type DenSigninGateProps = {
@@ -72,7 +79,7 @@ const subscribeToDenBootstrap = (onStoreChange: () => void) => {
  * never let users land on `/signin` — redirect them to `/session` instead.
  *
  * While we're still checking the Den session AND sign-in is required, we
- * render nothing so the transcript/settings never flash behind the gate.
+ * show startup progress without mounting transcript/settings behind the gate.
  */
 function DenSigninGate({ children }: DenSigninGateProps) {
   const denAuth = useDenAuth();
@@ -182,7 +189,7 @@ function DenSigninGate({ children }: DenSigninGateProps) {
   }, [navigate]);
 
   if (requireSignin && denAuth.status === "checking") {
-    return null;
+    return <StartupScreen message="Checking your sign-in" />;
   }
 
   if (redirectingPreparedWorkspace) return <Navigate to="/onboarding" replace />;
@@ -238,10 +245,8 @@ function DenAuthControlActions() {
       if (!grant?.trim()) return { ok: false, error: "grant is required" };
       const settings = readDenSettings();
       const targetBaseUrl = argBaseUrl?.trim() || settings.baseUrl;
-      const client = createDenClient({ baseUrl: targetBaseUrl });
       const result = await exchangeHandoffAndSignIn(grant.trim(), {
         baseUrl: targetBaseUrl,
-        client,
         // Automation surface: commit the exchange-reported org directly; a
         // UI chooser would strand a headless driver.
         desktopInitiated: false,
@@ -345,27 +350,70 @@ function BrandThemeControlActions() {
   }, []);
   useControlAction(relaunchAction);
 
+  const [renderThrow, setRenderThrow] = useState<string | null>(null);
+  const renderThrowAction = useMemo<OpenworkControlAction | null>(() => {
+    if (!import.meta.env.DEV) return null;
+    return {
+      id: "eval.app.render_throw",
+      label: "Throw during render for eval",
+      description: "Dev-only eval hook that throws during React render so the app-level recovery screen can be exercised.",
+      sideEffect: "mutation",
+      requiresArgs: true,
+      args: [{ name: "message", type: "string", required: true, description: "Error message to throw." }],
+      execute: (args) => {
+        if (typeof args !== "object" || args === null || !("message" in args) || typeof args.message !== "string") {
+          return { ok: false, error: "message is required" };
+        }
+        setRenderThrow(args.message);
+        return undefined;
+      },
+    };
+  }, []);
+  useControlAction(renderThrowAction);
+  if (renderThrow) throw new Error(renderThrow);
+
   return null;
 }
 
 let appOpenedCaptured = false;
 
+/**
+ * Analytics and the Cloud inventory prefetch mount above the activation gate.
+ * An activation-required install holds them back until it is activated and
+ * its desktop config has resolved once — the same readiness the updater waits
+ * for — so nothing leaves the machine before the organization server is known
+ * and an organization policy could be honoured. Other installs are unaffected.
+ */
+function useOutboundEgressAllowed() {
+  const bootstrap = useSyncExternalStore(
+    subscribeToDenBootstrap,
+    readDenBootstrapSnapshot,
+    readDenBootstrapSnapshot,
+  );
+  const desktopConfig = useDesktopConfig();
+  return outboundEgressAllowed(readDesktopDistributionInfo(), bootstrap, {
+    desktopConfigLoading: desktopConfig.loading,
+  });
+}
+
 export function AppRoot() {
   useDesktopFontZoomBehavior();
   useVisualViewportInset();
+  const egressAllowed = useOutboundEgressAllowed();
 
   // Module-level dedupe keeps StrictMode double-mounts from double-counting.
   useEffect(() => {
-    if (appOpenedCaptured) return;
+    if (!egressAllowed || appOpenedCaptured) return;
     appOpenedCaptured = true;
     initAnalytics();
     captureAnalyticsEvent("app_opened", {});
-  }, []);
+  }, [egressAllowed]);
 
   // Fetch what the organization shares with this member up front. Settings
   // mounts cold every time the extensions panel opens, so without this the
   // readiness groups wait on a Den round-trip the app could have done already.
   useEffect(() => {
+    if (!egressAllowed) return;
     prefetchCloudInventory();
     const handleSessionChanged = () => {
       clearCloudInventoryCache();
@@ -373,22 +421,26 @@ export function AppRoot() {
     };
     window.addEventListener(denSettingsChangedEvent, handleSessionChanged);
     return () => window.removeEventListener(denSettingsChangedEvent, handleSessionChanged);
-  }, []);
+  }, [egressAllowed]);
 
   return (
     <>
       <DevProfiler id="AppRoot">
+        <DesktopUpdaterProvider>
         <ShellConfigProvider>
         <AppMenuProvider>
         <OpenworkControlProvider>
           <OpenworkRouteControlActions />
+          <ChatDeepLinkListener />
           <OpenworkContextPublisher />
           <DenAuthControlActions />
           <BrandThemeControlActions />
-          <CloudWorkspaceStatusProvider>
           <EnterpriseActivationGate>
-          <DenSigninGate>
-            <Routes>
+            <DenSigninGate>
+              <OpenWorkWebAccessGate>
+                <CloudWorkspaceStatusProvider>
+                  <ComputerUseControls />
+                  <Routes>
               <Route
                 path="/signin"
                 element={
@@ -409,7 +461,7 @@ export function AppRoot() {
                 path="/welcome"
                 element={
                   <DevProfiler id="WelcomeRoute">
-                    <WelcomeRoute />
+                    {isDesktopRuntime() ? <Navigate to="/session" replace /> : <WelcomeRoute />}
                   </DevProfiler>
                 }
               />
@@ -454,6 +506,9 @@ export function AppRoot() {
                   </DevProfiler>
                 }
               />
+              <Route path="/apps" element={<DevProfiler id="AppsRoute"><SessionRoute /></DevProfiler>} />
+              <Route path="/dashboard/apps/:appId" element={<DevProfiler id="DashboardAppRoute"><SessionRoute /></DevProfiler>} />
+              <Route path="/apps/:appId" element={<DevProfiler id="AppPreviewRoute"><SessionRoute /></DevProfiler>} />
               <Route
                 path="/dashboard"
                 element={
@@ -498,15 +553,17 @@ export function AppRoot() {
                   settings deliberately via the sidebar or command palette. */}
               <Route path="/" element={<Navigate to="/session" replace />} />
               <Route path="*" element={<Navigate to="/session" replace />} />
-            </Routes>
-          </DenSigninGate>
-          <LoadingOverlay />
+                  </Routes>
+                  <LoadingOverlay />
+                  <CloudWorkspaceOverlay />
+                </CloudWorkspaceStatusProvider>
+              </OpenWorkWebAccessGate>
+            </DenSigninGate>
           </EnterpriseActivationGate>
-          <CloudWorkspaceOverlay />
-          </CloudWorkspaceStatusProvider>
         </OpenworkControlProvider>
         </AppMenuProvider>
         </ShellConfigProvider>
+        </DesktopUpdaterProvider>
       </DevProfiler>
       {/*
         DevProfilerOverlay sits OUTSIDE the AppRoot <Profiler> zone on
