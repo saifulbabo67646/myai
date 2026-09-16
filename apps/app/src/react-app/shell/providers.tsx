@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
 
 import { isWebDeployment } from "@/app/lib/openwork-deployment";
+import { readDesktopDistributionInfo } from "@/app/lib/desktop";
 import { hydrateOpenworkServerSettingsFromEnv } from "@/app/lib/openwork-server";
 import { isDesktopRuntime } from "@/app/utils";
 import { ConnectLinkProvider } from "@/react-app/domains/cloud/connect-link-provider";
@@ -24,6 +25,7 @@ import { resolveOpenworkConnection } from "./openwork-connection";
 import { ReloadCoordinatorProvider } from "./reload-coordinator";
 
 export function resolveDefaultServerUrl(): string {
+  if (String(readDesktopDistributionInfo().flavor) === "team") return "";
   if (isDesktopRuntime()) return "http://127.0.0.1:4096";
 
   const openworkUrl =

@@ -63,6 +63,7 @@ import {
 } from "./linux-desktop-integration.mjs";
 import { createDesktopAutomationRunner, normalizeRunnerBaseUrl } from "./automation-runner.mjs";
 import {
+  credentialedFetchAllowed,
   desktopActivationRequired,
   enterprisePreactivationCommandAllowed,
   resolveDesktopDistribution,
@@ -2408,12 +2409,32 @@ const desktopCommandHandlers = {
       const url = String(args[0] ?? "").trim();
       const init = args[1] ?? {};
       if (!url) throw new Error("URL is required.");
+      const forwardedHeaders = {};
+      let includeCredentials = false;
+      if (init.headers && typeof init.headers === "object") {
+        for (const [name, value] of Object.entries(init.headers)) {
+          if (name.toLowerCase() === "x-openwork-ipc-credentials") {
+            includeCredentials = value === "include";
+            continue;
+          }
+          if (typeof value === "string") forwardedHeaders[name] = value;
+        }
+      }
+      if (
+        includeCredentials
+        && (
+          DESKTOP_DISTRIBUTION.flavor !== "team"
+          || !credentialedFetchAllowed(url, workspaceStore.readDesktopBootstrapConfigSync().baseUrl)
+        )
+      ) {
+        throw new Error("Credentialed fetch target is not allowed.");
+      }
       /** @type {RequestInit} */
       const requestInit = {
         method: typeof init.method === "string" ? init.method : undefined,
-        headers: init.headers && typeof init.headers === "object" ? init.headers : undefined,
+        headers: Object.keys(forwardedHeaders).length > 0 ? forwardedHeaders : undefined,
         body: typeof init.body === "string" ? init.body : undefined,
-        credentials: "omit",
+        credentials: includeCredentials ? "include" : "omit",
         cache: "no-store",
       };
       if (init.agentContextDiagnostics && typeof init.agentContextDiagnostics === "object") {

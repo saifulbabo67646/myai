@@ -28,6 +28,7 @@ import { applyBrandAppName, readDesktopDistributionInfo } from "../../../app/lib
 import { DenSignInSurface } from "./den-signin-surface";
 import { tryOpenBrowserAuthUrl } from "./open-browser-auth";
 import { saveControlPlaneUrl } from "../settings/cloud/control-plane-url";
+import { MyaiTeamSignInPage } from "./myai-team-signin-page";
 
 export type ForcedSigninPageProps = {
   developerMode: boolean;
@@ -42,7 +43,7 @@ export type ForcedSigninPageProps = {
  * draft state (base URL, manual auth input) and pipes it into the
  * shared `DenSignInSurface` presentation layer.
  */
-export function ForcedSigninPage({ developerMode }: ForcedSigninPageProps) {
+function LegacyForcedSigninPage({ developerMode }: ForcedSigninPageProps) {
   const platform = usePlatform();
   const denAuth = useDenAuth();
   const desktopConfig = useDesktopConfig();
@@ -318,4 +319,11 @@ export function ForcedSigninPage({ developerMode }: ForcedSigninPageProps) {
       }}
     />
   );
+}
+
+export function ForcedSigninPage(props: ForcedSigninPageProps) {
+  if (String(readDesktopDistributionInfo().flavor) === "team") {
+    return <MyaiTeamSignInPage />;
+  }
+  return <LegacyForcedSigninPage {...props} />;
 }

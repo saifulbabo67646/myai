@@ -23,6 +23,7 @@ import {
   writeOpenworkServerSettings,
 } from "../../app/lib/openwork-server";
 import { isDesktopRuntime, isElectronRuntime, safeStringify } from "../../app/utils";
+import { readDesktopDistributionInfo } from "../../app/lib/desktop";
 import { useEnterpriseActivationRequired } from "../domains/cloud/enterprise-activation-gate";
 import { useServer } from "../kernel/server-provider";
 import { useBootState } from "./boot-state";
@@ -73,6 +74,10 @@ export function useDesktopRuntimeBoot() {
   useEffect(() => {
     if (!isDesktopRuntime()) {
       // Web/headless: nothing to spawn, we're instantly "ready".
+      markReady();
+      return;
+    }
+    if (String(readDesktopDistributionInfo().flavor) === "team") {
       markReady();
       return;
     }

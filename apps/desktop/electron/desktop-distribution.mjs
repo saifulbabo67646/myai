@@ -16,6 +16,15 @@ export const CLOUD_DESKTOP_DISTRIBUTION = Object.freeze({
   requireActivation: false,
 });
 
+export const TEAM_DESKTOP_DISTRIBUTION = Object.freeze({
+  flavor: "team",
+  appName: "myai Team",
+  appIdentifier: "bd.myai.app",
+  protocolScheme: "myai",
+  requireSignin: true,
+  requireActivation: false,
+});
+
 export const ENTERPRISE_DESKTOP_DISTRIBUTION = Object.freeze({
   flavor: "enterprise",
   appName: "myai Enterprise",
@@ -25,9 +34,22 @@ export const ENTERPRISE_DESKTOP_DISTRIBUTION = Object.freeze({
   requireActivation: true,
 });
 
+export function credentialedFetchAllowed(target, configuredBase) {
+  try {
+    const targetUrl = new URL(target);
+    const baseUrl = new URL(configuredBase);
+    if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") return false;
+    if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") return false;
+    if (targetUrl.username || targetUrl.password || baseUrl.username || baseUrl.password) return false;
+    return targetUrl.origin === baseUrl.origin;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeFlavor(value) {
   const flavor = value?.trim().toLowerCase();
-  return flavor === "cloud" || flavor === "enterprise" ? flavor : "public";
+  return flavor === "cloud" || flavor === "team" || flavor === "enterprise" ? flavor : "public";
 }
 
 /**
@@ -44,6 +66,7 @@ export function resolveDesktopDistribution({
     isPackaged ? packageFlavor : (environmentFlavor || packageFlavor),
   );
   if (flavor === "cloud") return CLOUD_DESKTOP_DISTRIBUTION;
+  if (flavor === "team") return TEAM_DESKTOP_DISTRIBUTION;
   if (flavor === "enterprise") return ENTERPRISE_DESKTOP_DISTRIBUTION;
   return PUBLIC_DESKTOP_DISTRIBUTION;
 }

@@ -27,6 +27,7 @@ import {
 import { exchangeHandoffAndSignIn } from "../../../app/lib/den-handoff";
 import { readOrgSelectionPending } from "../../../app/lib/den-sign-in-intent";
 import { desktopBridge, readDesktopDistributionInfo } from "../../../app/lib/desktop";
+import { createMyaiServerClient } from "../../../app/lib/myai-server-client";
 import {
   denSessionUpdatedEvent,
   denSettingsChangedEvent,
@@ -235,6 +236,45 @@ export function DenAuthProvider({ children }: DenAuthProviderProps) {
     ) {
       verifiedCredentialRef.current = null;
       setVerifiedIdentity(null);
+    }
+
+    if (String(readDesktopDistributionInfo().flavor) === "team") {
+      const baseUrl = readDenBootstrapConfig().baseUrl;
+      if (!baseUrl) {
+        setUser(null);
+        setVerifiedIdentity(null);
+        setError("The team server URL is not configured.");
+        updateStatus("signed_out");
+        clearDesktopSentrySession();
+        return;
+      }
+      if (statusRef.current === "signed_out") updateStatus("checking");
+      try {
+        const principal = await createMyaiServerClient({ baseUrl }).getMe();
+        if (currentRun !== refreshTokenRef.current) return;
+        verifiedCredentialRef.current = null;
+        setVerifiedIdentity({
+          principalId: principal.user.id,
+          organizationId: principal.team.id,
+        });
+        setUser(principal.user);
+        setError(null);
+        lastSignalRetryAtRef.current = null;
+        updateStatus("signed_in");
+      } catch (nextError) {
+        if (currentRun !== refreshTokenRef.current) return;
+        setUser(null);
+        verifiedCredentialRef.current = null;
+        setVerifiedIdentity(null);
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : "Failed to restore myai Team session.",
+        );
+        updateStatus("signed_out");
+        clearDesktopSentrySession();
+      }
+      return;
     }
 
     if (!token) {
