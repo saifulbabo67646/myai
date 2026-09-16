@@ -337,6 +337,7 @@ the env file.
 
 ```bash
 cd packaging/docker
+set -a; . ./.env; set +a          # load MYAI_WORKSPACE_HOST_PATH into this shell
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
 # 1. Stop the writers so the SQLite database and the runtime state are quiescent.
@@ -375,6 +376,7 @@ file.
 
 ```bash
 cd packaging/docker
+set -a; . ./.env; set +a
 STAMP=<the backup you want>
 
 # 1. Stop everything. `down` keeps the volume.
@@ -386,11 +388,11 @@ docker volume create myai_myai-control-data
 docker run --rm -v myai_myai-control-data:/data -v "$PWD/backups:/backup:ro" \
   myai-server:local tar xzf "/backup/control-$STAMP.tgz" -C /data
 
-# 3. Restore workspace storage (adjust paths to your layout).
-sudo rm -rf /srv/myai/workspaces
-sudo mkdir -p /srv/myai
-sudo tar xzf "backups/workspaces-$STAMP.tgz" -C /srv/myai
-sudo chown -R 10001:10001 /srv/myai/workspaces
+# 3. Restore workspace storage (the archive is relative to the parent directory).
+sudo rm -rf "$MYAI_WORKSPACE_HOST_PATH"
+sudo mkdir -p "$(dirname "$MYAI_WORKSPACE_HOST_PATH")"
+sudo tar xzf "backups/workspaces-$STAMP.tgz" -C "$(dirname "$MYAI_WORKSPACE_HOST_PATH")"
+sudo chown -R 10001:10001 "$MYAI_WORKSPACE_HOST_PATH"
 
 # 4. Restore the matching env file, or accept re-sign-in with a new secret.
 cp "backups/env-$STAMP.bak" .env && chmod 600 .env
