@@ -185,6 +185,7 @@ const teamDesktop = spec.world(async (_seed, { place }) => {
 const publicDesktop = spec.world(async (seed) => {
   const app = await seed.desktop({
     name: "myai-wp6-public",
+    workspacePath: process.cwd(),
     env: {
       OPENWORK_DESKTOP_DISTRIBUTION: "public",
       OPENWORK_DEV_MODE: "1",
@@ -202,6 +203,7 @@ test("team desktop signs in, uses scoped workspace access, and rejects a revoked
   await user.type({ role: "textbox", label: "Password" }, world.memberPassword);
   await user.click({ role: "button", label: "Sign in" });
   await user.see({ testId: "myai-team-workspace" }, { timeoutMs: 120_000 });
+  expect(await probe.hash()).toBe("#/team");
   await user.see({ text: "Team workspace" });
   await user.click({ role: "button", label: "Create runtime session" });
   await user.see({ testId: "myai-team-session" });
@@ -222,4 +224,6 @@ test("team desktop signs in, uses scoped workspace access, and rejects a revoked
 publicDesktop("public desktop keeps local startup sign-in free", async ({ user, probe }) => {
   expect(await probe.has("myai-team-signin")).toBe(false);
   await user.notSee({ testId: "myai-team-signin" });
+  await user.see("composer", { editable: true, timeoutMs: 120_000 });
+  await user.see("Run task");
 });

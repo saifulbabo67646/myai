@@ -63,6 +63,7 @@ import {
 } from "./linux-desktop-integration.mjs";
 import { createDesktopAutomationRunner, normalizeRunnerBaseUrl } from "./automation-runner.mjs";
 import {
+  credentialedFetchAllowed,
   desktopActivationRequired,
   enterprisePreactivationCommandAllowed,
   resolveDesktopDistribution,
@@ -2418,6 +2419,15 @@ const desktopCommandHandlers = {
           }
           if (typeof value === "string") forwardedHeaders[name] = value;
         }
+      }
+      if (
+        includeCredentials
+        && (
+          DESKTOP_DISTRIBUTION.flavor !== "team"
+          || !credentialedFetchAllowed(url, workspaceStore.readDesktopBootstrapConfigSync().baseUrl)
+        )
+      ) {
+        throw new Error("Credentialed fetch target is not allowed.");
       }
       /** @type {RequestInit} */
       const requestInit = {

@@ -97,6 +97,7 @@ function DenSigninGate({ children }: DenSigninGateProps) {
   const isTeamDesktop = String(readDesktopDistributionInfo().flavor) === "team";
   const path = location.pathname.toLowerCase();
   const onSignin = path === "/signin" || path.startsWith("/signin/");
+  const onTeam = path === "/team" || path.startsWith("/team/");
   const onOnboarding = path === "/onboarding" || path.startsWith("/onboarding/");
   const hasPreparedBootstrap = Boolean(bootstrap.prepared);
   const redirectingPreparedWorkspace =
@@ -112,18 +113,21 @@ function DenSigninGate({ children }: DenSigninGateProps) {
     // their cached token is still valid.
     if (denAuth.status === "checking") return;
 
-    if (requireSignin) {
+    if (isTeamDesktop) {
       if (!denAuth.isSignedIn && !onSignin) {
         navigate("/signin", { replace: true });
       } else if (denAuth.isSignedIn && onSignin) {
-        navigate(
-          isTeamDesktop
-            ? "/team"
-            : signedInRoute(readDenSettings().activeOrgId, {
-                orgSelectionPending: readOrgSelectionPending().pending,
-              }),
-          { replace: true },
-        );
+        navigate("/team", { replace: true });
+      } else if (denAuth.isSignedIn && !onTeam) {
+        navigate("/team", { replace: true });
+      }
+    } else if (requireSignin) {
+      if (!denAuth.isSignedIn && !onSignin) {
+        navigate("/signin", { replace: true });
+      } else if (denAuth.isSignedIn && onSignin) {
+        navigate(signedInRoute(readDenSettings().activeOrgId, {
+          orgSelectionPending: readOrgSelectionPending().pending,
+        }), { replace: true });
       }
     } else if (onSignin) {
       navigate("/session", { replace: true });
@@ -152,6 +156,7 @@ function DenSigninGate({ children }: DenSigninGateProps) {
     navigate,
     onOnboarding,
     onSignin,
+    onTeam,
     isTeamDesktop,
     requireSignin,
   ]);

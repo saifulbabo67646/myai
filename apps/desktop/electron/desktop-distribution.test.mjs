@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   CLOUD_DESKTOP_DISTRIBUTION,
+  credentialedFetchAllowed,
   ENTERPRISE_DESKTOP_DISTRIBUTION,
   PUBLIC_DESKTOP_DISTRIBUTION,
   TEAM_DESKTOP_DISTRIBUTION,
@@ -114,6 +115,32 @@ describe("desktopActivationRequired", () => {
       PUBLIC_DESKTOP_DISTRIBUTION,
       { requireActivation: true },
     ), true);
+  });
+});
+
+describe("credentialedFetchAllowed", () => {
+  it("allows only URLs on the configured team-server origin", () => {
+    assert.equal(
+      credentialedFetchAllowed(
+        "http://127.0.0.1:4100/api/v1/me",
+        "http://127.0.0.1:4100",
+      ),
+      true,
+    );
+    assert.equal(
+      credentialedFetchAllowed(
+        "http://127.0.0.2:4100/api/v1/me",
+        "http://127.0.0.1:4100",
+      ),
+      false,
+    );
+    assert.equal(
+      credentialedFetchAllowed(
+        "http://user:password@127.0.0.1:4100/api/v1/me",
+        "http://127.0.0.1:4100",
+      ),
+      false,
+    );
   });
 });
 

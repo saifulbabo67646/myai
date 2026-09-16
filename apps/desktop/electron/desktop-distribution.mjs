@@ -34,6 +34,19 @@ export const ENTERPRISE_DESKTOP_DISTRIBUTION = Object.freeze({
   requireActivation: true,
 });
 
+export function credentialedFetchAllowed(target, configuredBase) {
+  try {
+    const targetUrl = new URL(target);
+    const baseUrl = new URL(configuredBase);
+    if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") return false;
+    if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") return false;
+    if (targetUrl.username || targetUrl.password || baseUrl.username || baseUrl.password) return false;
+    return targetUrl.origin === baseUrl.origin;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeFlavor(value) {
   const flavor = value?.trim().toLowerCase();
   return flavor === "cloud" || flavor === "team" || flavor === "enterprise" ? flavor : "public";
