@@ -470,7 +470,10 @@ export async function desktopDownloadBinary(
 type DesktopFetchMainOptions = {
   timeoutMs?: number;
   agentContextDiagnosticsDeadlineAtMs?: number;
+  includeCredentials?: boolean;
 };
+
+const IPC_CREDENTIALS_HEADER = "x-openwork-ipc-credentials";
 
 async function desktopFetchThroughMain(
   input: RequestInfo | URL,
@@ -506,6 +509,10 @@ async function desktopFetchThroughMain(
   }
 
   const diagnosticsDeadlineAtMs = options.agentContextDiagnosticsDeadlineAtMs;
+  if (options.includeCredentials) {
+    headers ??= {};
+    headers[IPC_CREDENTIALS_HEADER] = "include";
+  }
   const result = await invokeElectronHelper("__fetch", url, {
     method,
     headers,
@@ -537,6 +544,19 @@ export const desktopFetch: typeof globalThis.fetch = async (input, init) => {
 
 export async function desktopFetchViaMain(input: RequestInfo | URL, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   return desktopFetchThroughMain(input, init, { timeoutMs });
+}
+
+/**
+ * Use Electron's session cookie jar for a control-plane request. This is kept
+ * separate from the default bridge so existing remote requests remain
+ * credential-free unless a caller opts into the myai session flow.
+ */
+export async function desktopFetchViaMainWithCredentials(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs?: number,
+): Promise<Response> {
+  return desktopFetchThroughMain(input, init, { timeoutMs, includeCredentials: true });
 }
 
 export async function desktopFetchAgentContextDiagnostics(

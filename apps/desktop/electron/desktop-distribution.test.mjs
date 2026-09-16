@@ -5,6 +5,7 @@ import {
   CLOUD_DESKTOP_DISTRIBUTION,
   ENTERPRISE_DESKTOP_DISTRIBUTION,
   PUBLIC_DESKTOP_DISTRIBUTION,
+  TEAM_DESKTOP_DISTRIBUTION,
   desktopActivationRequired,
   enterpriseActivationComplete,
   enterprisePreactivationCommandAllowed,
@@ -66,6 +67,17 @@ describe("resolveDesktopDistribution", () => {
         environmentFlavor: "enterprise",
       }).flavor,
       "enterprise",
+    );
+  });
+
+  it("allows development runs to exercise the team flavor", () => {
+    assert.deepEqual(
+      resolveDesktopDistribution({
+        isPackaged: false,
+        packageFlavor: "public",
+        environmentFlavor: "team",
+      }),
+      TEAM_DESKTOP_DISTRIBUTION,
     );
   });
 });
