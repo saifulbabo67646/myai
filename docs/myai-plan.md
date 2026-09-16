@@ -378,7 +378,7 @@ WP-8 housekeeping/decisions: anytime, owner = human
 | WP-5 | Branding completion (Phase 3) | WP-1 | B (split ownership with WP-3) | ✅ done 2026-09-16 (PR #7) |
 | WP-6 | Desktop ↔ server integration | WP-3 + WP-4a | D | waiting |
 | WP-7 | Deployment packaging + docs | WP-4 green | C | waiting |
-| WP-8 | Housekeeping & human decisions | — | anytime | 🔄 in review (PR: `wp/8-housekeeping`) — housekeeping landed; DEC-3 + archive step open (owner) |
+| WP-8 | Housekeeping & human decisions | — | anytime | 🔄 in review (PR #9) — housekeeping landed; DEC-3 + archive step open (owner) |
 
 ### 9.3 WP cards
 
@@ -572,7 +572,7 @@ not a regression; no WP fixes them opportunistically.
 - Archive `saifulbabo67646/myai-old` after the first WP-1 cycle proves the sync ritual.
   - **Still owner's call 2026-09-16 (WP-8):** the WP-1 cycle landed (PR #3), but WP-8 does not
     archive, delete, or force-delete repositories — the owner runs this step.
-- **Landed 2026-09-16 (PR: `wp/8-housekeeping`).** §9.2 WP-5 row flipped to done (PR #7);
+- **Landed 2026-09-16 (PR #9).** §9.2 WP-5 row flipped to done (PR #7);
   `strip-ee.mjs`'s allow-list lost its one stale entry and `myai-ee-free-boundary.test.ts`
   gained an `allowlistHonest` claim (red → green); DEC-1's MIT record preserved untouched.
   Open and left open: DEC-3 (prune depth) and the archive step above — the decision memo with
