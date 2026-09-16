@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS myai_membership (
   status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS myai_one_active_owner_idx ON myai_membership(role) WHERE role = 'owner' AND status = 'active';
 CREATE TABLE IF NOT EXISTS myai_invitation (
   id TEXT PRIMARY KEY NOT NULL,
   installation_id TEXT NOT NULL REFERENCES myai_installation(id) ON DELETE CASCADE,

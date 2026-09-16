@@ -34,7 +34,7 @@ async function fixture(): Promise<{ app: MyaiApplication; root: string; ownerCoo
   return { app, root, ownerCookie: cookie(setup) };
 }
 
-test("role enforcement and workspace isolation apply on every protected route", async () => {
+test("role enforcement, workspace isolation, and live grant changes apply on every protected route", async () => {
   needs({ placement: "local" });
   const fixtureState = await fixture();
   try {
@@ -53,6 +53,16 @@ test("role enforcement and workspace isolation apply on every protected route", 
     expect(grant.status).toBe(201);
     const afterGrant = object(await (await request(fixtureState.app, "/api/v1/workspaces", { headers: { cookie: memberCookie } })).json());
     expect(afterGrant.workspaces).toHaveLength(1);
+    const runtimeTokenResponse = await request(fixtureState.app, `/api/v1/workspaces/${workspaceId}/runtime-token`, { method: "POST", headers: { cookie: memberCookie } });
+    const runtimeToken = String(object(await runtimeTokenResponse.json()).token);
+    const downgraded = await request(fixtureState.app, `/api/v1/workspaces/${workspaceId}/access`, { method: "POST", headers: { cookie: fixtureState.ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ userId: memberId, role: "viewer" }) });
+    expect(downgraded.status).toBe(201);
+    const staleWrite = await request(fixtureState.app, `/api/v1/workspaces/${workspaceId}/runtime/files/content?path=approved.txt`, { method: "PUT", headers: { authorization: `Bearer ${runtimeToken}`, "content-type": "application/json" }, body: JSON.stringify({ content: "not allowed" }) });
+    expect(staleWrite.status).toBe(403);
+    const revokedGrant = await request(fixtureState.app, `/api/v1/workspaces/${workspaceId}/access/${memberId}`, { method: "DELETE", headers: { cookie: fixtureState.ownerCookie } });
+    expect(revokedGrant.status).toBe(204);
+    const staleRead = await request(fixtureState.app, `/api/v1/workspaces/${workspaceId}/runtime/files/content?path=approved.txt`, { headers: { authorization: `Bearer ${runtimeToken}` } });
+    expect(staleRead.status).toBe(401);
   } finally {
     fixtureState.app.close();
     await rm(fixtureState.root, { recursive: true, force: true });
@@ -109,6 +119,10 @@ test("audit events are queryable without returning secret values", async () => {
     expect(raw).toContain("owner_bootstrapped");
     expect(raw).toContain("invitation_created");
     expect(raw).not.toContain(acceptCode);
+    const auditSecret = "audit-metadata-secret";
+    fixtureState.app.store.audit("metadata_scrub_test", fixtureState.app.store.members()[0]?.userId ?? null, null, null, { authorization: `Bearer ${auditSecret}`, nested: { prompt: auditSecret }, safe: "visible" });
+    const scrubbedResponse = await request(fixtureState.app, "/api/v1/audit/events", { headers: { cookie: fixtureState.ownerCookie } });
+    expect(JSON.stringify(await scrubbedResponse.json())).not.toContain(auditSecret);
   } finally {
     fixtureState.app.close();
     await rm(fixtureState.root, { recursive: true, force: true });
@@ -126,6 +140,29 @@ test("runtime connection failures are mapped to the stable unavailable error", a
     const runtime = await request(fixtureState.app, `/api/v1/workspaces/${workspaceId}/runtime/opencode/session`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ title: "Unavailable" }) });
     expect(runtime.status).toBe(502);
     expect(object(await runtime.json()).error).toMatchObject({ code: "runtime_unavailable" });
+  } finally {
+    fixtureState.app.close();
+    await rm(fixtureState.root, { recursive: true, force: true });
+  }
+});
+
+test("only owners can change or revoke an existing admin", async () => {
+  needs({ placement: "local" });
+  const fixtureState = await fixture();
+  try {
+    const firstInvitation = await request(fixtureState.app, "/api/v1/invitations", { method: "POST", headers: { cookie: fixtureState.ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ email: "first-admin@example.test", role: "admin" }) });
+    const firstCode = String(object(await firstInvitation.json()).acceptCode);
+    const firstAccepted = await request(fixtureState.app, `/api/v1/invitations/${firstCode}/accept`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "First Admin", password: "first-admin-password-123" }) });
+    const firstId = String(object(object(await firstAccepted.clone().json()).user).id);
+    const secondInvitation = await request(fixtureState.app, "/api/v1/invitations", { method: "POST", headers: { cookie: fixtureState.ownerCookie, "content-type": "application/json" }, body: JSON.stringify({ email: "second-admin@example.test", role: "admin" }) });
+    const secondCode = String(object(await secondInvitation.json()).acceptCode);
+    const secondAccepted = await request(fixtureState.app, `/api/v1/invitations/${secondCode}/accept`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Second Admin", password: "second-admin-password-123" }) });
+    const secondId = String(object(object(await secondAccepted.clone().json()).user).id);
+    const firstSignIn = await request(fixtureState.app, "/api/v1/auth/sign-in", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "first-admin@example.test", password: "first-admin-password-123" }) });
+    const firstCookie = cookie(firstSignIn);
+    expect((await request(fixtureState.app, `/api/v1/members/${secondId}`, { method: "PATCH", headers: { cookie: firstCookie, "content-type": "application/json" }, body: JSON.stringify({ role: "member" }) })).status).toBe(403);
+    expect((await request(fixtureState.app, `/api/v1/members/${secondId}`, { method: "DELETE", headers: { cookie: firstCookie } })).status).toBe(403);
+    expect(firstId).not.toBe(secondId);
   } finally {
     fixtureState.app.close();
     await rm(fixtureState.root, { recursive: true, force: true });

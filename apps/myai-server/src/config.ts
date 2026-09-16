@@ -79,6 +79,9 @@ export function resolveMyaiConfig(input: MyaiConfigInput): MyaiConfig {
     if (!loopbackHost && publicUrl.protocol !== "https:") {
       throw new Error("Invalid myai server configuration: HTTPS is required for non-loopback access");
     }
+    if (!loopbackHost) {
+      throw new Error("Invalid myai server configuration: production server must bind to loopback while HTTPS terminates at a reverse proxy");
+    }
   }
   if (input.port !== undefined && (!Number.isInteger(input.port) || input.port < 0 || input.port > 65535)) {
     throw new Error("Invalid myai server configuration: port is invalid");

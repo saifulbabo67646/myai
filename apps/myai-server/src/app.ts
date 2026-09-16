@@ -173,7 +173,11 @@ export function createMyaiApp(input: MyaiConfigInput): MyaiApplication {
     const authResponse = await authJson(auth, config, "/sign-up/email", payload);
     if (!authResponse.ok) return failure(requestId, authResponse.status === 422 ? 409 : 400, authResponse.status === 422 ? "conflict" : "invalid_request", "The owner could not be created.");
     const created = await authPayload(auth, authResponse);
-    store.addMembership(created.user, "owner");
+    try {
+      store.addMembership(created.user, "owner");
+    } catch {
+      return failure(requestId, 409, "conflict", "The installation already has an owner.");
+    }
     store.audit("owner_bootstrapped", created.user.id, created.user.id, null);
     logger.write({ event: "owner_bootstrapped", actorUserId: created.user.id });
     return copyCookie(authResponse, requestId, { user: created.user, team: { id: "team_local", name: "myai team" }, membership: { userId: created.user.id, role: "owner" }, session: created.session }, 201);
@@ -259,7 +263,11 @@ export function createMyaiApp(input: MyaiConfigInput): MyaiApplication {
     if (!roleAllows(current.membership.role, "admin")) return failure(requestId, 403, "forbidden", "The current role cannot change members.");
     const payload = await jsonBody(context.req.raw, roleSchema);
     if (!payload) return failure(requestId, 400, "invalid_request", "The request payload is invalid.");
-    const updated = store.changeRole(context.req.param("userId"), payload.role);
+    const target = store.membership(context.req.param("userId"));
+    if (!target) return failure(requestId, 404, "not_found", "The member was not found.");
+    if (target.role === "owner") return failure(requestId, 403, "forbidden", "Ownership changes are not supported.");
+    if (current.membership.role !== "owner" && target.role === "admin") return failure(requestId, 403, "forbidden", "Only the owner can change an admin.");
+    const updated = store.changeRole(target.userId, payload.role);
     if (!updated) return failure(requestId, 404, "not_found", "The member was not found.");
     store.audit("member_role_changed", current.user.id, updated.userId, null, { role: updated.role });
     return responseJson(requestId, 200, updated);
@@ -269,8 +277,12 @@ export function createMyaiApp(input: MyaiConfigInput): MyaiApplication {
     const requestId = context.get("requestId");
     const current = await principal(context.req.raw, auth, store);
     if (!current) return failure(requestId, 401, "unauthenticated", "Authentication is required.");
-    if (!roleAllows(current.membership.role, "admin")) return failure(requestId, 403, "forbidden", "The current role cannot revoke members.");
     const userId = context.req.param("userId");
+    if (!roleAllows(current.membership.role, "admin")) return failure(requestId, 403, "forbidden", "The current role cannot revoke members.");
+    const target = store.membership(userId);
+    if (!target) return failure(requestId, 404, "not_found", "The member was not found.");
+    if (target.role === "owner") return failure(requestId, 403, "forbidden", "The owner cannot be revoked.");
+    if (current.membership.role !== "owner" && target.role === "admin") return failure(requestId, 403, "forbidden", "Only the owner can revoke an admin.");
     if (!store.revokeMember(userId)) return failure(requestId, 404, "not_found", "The member was not found.");
     store.audit("member_revoked", current.user.id, userId, null);
     logger.write({ event: "member_revoked", actorUserId: current.user.id, subjectId: userId });
@@ -381,7 +393,12 @@ export function createMyaiApp(input: MyaiConfigInput): MyaiApplication {
       }
     }
     try {
-      const response = await backend.proxy(context.req.raw, `${runtimePath}${context.req.url.includes("?") ? `?${context.req.url.split("?", 2)[1]}` : ""}`);
+      const liveScopes = access === "viewer" ? ["file:read"] : access === "member" || roleAllows(membership.role, "admin") ? ["runtime:session", "file:read", "file:write"] : [];
+      if (!liveScopes.includes(requiredScope)) {
+        store.audit("authorization_failed", credential.userId, credential.userId, workspaceId, { surface: "runtime", reason: "grant_scope" });
+        return failure(requestId, 403, "forbidden", "The runtime credential lacks the required scope.");
+      }
+      const response = await backend.proxy(context.req.raw, workspaceId, `${runtimePath}${context.req.url.includes("?") ? `?${context.req.url.split("?", 2)[1]}` : ""}`);
       store.audit("workspace_accessed", credential.userId, credential.userId, workspaceId, { method: context.req.method, path: runtimePath });
       return response;
     } catch {
@@ -397,7 +414,10 @@ export function createMyaiApp(input: MyaiConfigInput): MyaiApplication {
     if (!roleAllows(current.membership.role, "admin")) return failure(requestId, 403, "forbidden", "The current role cannot list audit events.");
     const parsedLimit = Number(context.req.query("limit") ?? "50");
     const limit = Number.isInteger(parsedLimit) && parsedLimit >= 1 && parsedLimit <= 100 ? parsedLimit : 50;
-    return responseJson(requestId, 200, { events: store.auditEvents(limit), nextCursor: null });
+    const cursor = context.req.query("cursor");
+    if (cursor && cursor.length > 200) return failure(requestId, 400, "invalid_request", "The request query is invalid.");
+    const events = store.auditEvents(limit, cursor);
+    return responseJson(requestId, 200, events);
   });
 
   app.notFound((context) => failure(context.get("requestId"), 404, "not_found", "The resource was not found."));

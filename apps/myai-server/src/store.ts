@@ -58,6 +58,23 @@ export interface AuditEvent {
   createdAt: string;
 }
 
+const sensitiveMetadataKey = /(authorization|password|token|cookie|secret|prompt|content|acceptcode|code)/i;
+
+function scrubMetadata(value: unknown, key = ""): unknown {
+  if (sensitiveMetadataKey.test(key)) return "[redacted]";
+  if (Array.isArray(value)) return value.map((entry) => scrubMetadata(entry));
+  if (typeof value !== "object" || value === null) return value;
+  const result: Record<string, unknown> = {};
+  for (const [childKey, childValue] of Object.entries(value)) result[childKey] = scrubMetadata(childValue, childKey);
+  return result;
+}
+
+function safeMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const scrubbed = scrubMetadata(value);
+  if (typeof scrubbed !== "object" || scrubbed === null || Array.isArray(scrubbed)) throw new Error("Audit metadata must be an object");
+  return Object.fromEntries(Object.entries(scrubbed));
+}
+
 export function hashOpaqueToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -251,12 +268,20 @@ export class ControlStore {
   }
 
   audit(type: string, actorUserId: string | null, subjectId: string | null, workspaceId: string | null, metadata: Record<string, unknown> = {}): void {
-    this.database.prepare("INSERT INTO myai_audit_event (id, event_type, actor_user_id, subject_id, workspace_id, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(`aud_${randomUUID()}`, type, actorUserId, subjectId, workspaceId, JSON.stringify(metadata), Date.now());
+    this.database.prepare("INSERT INTO myai_audit_event (id, event_type, actor_user_id, subject_id, workspace_id, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(`aud_${randomUUID()}`, type, actorUserId, subjectId, workspaceId, JSON.stringify(safeMetadata(metadata)), Date.now());
   }
 
-  auditEvents(limit: number): AuditEvent[] {
-    const rows: unknown[] = this.database.prepare("SELECT id, event_type, actor_user_id, subject_id, workspace_id, metadata_json, created_at FROM myai_audit_event ORDER BY created_at DESC, id DESC LIMIT ?").all(limit);
-    return rows.map((value) => {
+  auditEvents(limit: number, cursor?: string): { events: AuditEvent[]; nextCursor: string | null } {
+    const cursorRow: Record<string, unknown> | null = cursor
+      ? record(this.database.prepare("SELECT id, created_at FROM myai_audit_event WHERE id = ?").get(cursor))
+      : null;
+    const rows: unknown[] = cursor && !cursorRow
+      ? []
+      : cursorRow
+        ? this.database.prepare("SELECT id, event_type, actor_user_id, subject_id, workspace_id, metadata_json, created_at FROM myai_audit_event WHERE created_at < ? OR (created_at = ? AND id < ?) ORDER BY created_at DESC, id DESC LIMIT ?").all(cursorRow.created_at, cursorRow.created_at, cursor, limit + 1)
+        : this.database.prepare("SELECT id, event_type, actor_user_id, subject_id, workspace_id, metadata_json, created_at FROM myai_audit_event ORDER BY created_at DESC, id DESC LIMIT ?").all(limit + 1);
+    const hasMore = rows.length > limit;
+    const events = rows.slice(0, limit).map((value) => {
       const row = record(value);
       if (!row || typeof row.metadata_json !== "string") throw new Error("Database row contains invalid audit event");
       const metadata: unknown = JSON.parse(row.metadata_json);
@@ -268,9 +293,10 @@ export class ControlStore {
         actorUserId: nullableString(row.actor_user_id),
         subjectId: nullableString(row.subject_id),
         workspaceId: nullableString(row.workspace_id),
-        metadata: metadataRecord,
+        metadata: safeMetadata(metadataRecord),
         createdAt: isoTime(row.created_at, "created_at"),
       };
     });
+    return { events, nextCursor: hasMore ? events.at(-1)?.id ?? null : null };
   }
 }

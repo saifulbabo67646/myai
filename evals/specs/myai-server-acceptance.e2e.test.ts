@@ -60,17 +60,19 @@ test("fresh installation completes bootstrap, invitation, scoped file access, an
   const workspace = join(root, "workspace");
   await mkdir(workspace);
   await writeFile(join(workspace, "approved.txt"), "approved content\n");
+  let runtimeWorkspaceId: string | null = null;
   const runtime = createServer(async (incoming, outgoing) => {
-    if (incoming.url === "/opencode/session" && incoming.method === "POST") {
+    const runtimePrefix = runtimeWorkspaceId ? `/workspace/${runtimeWorkspaceId}` : "";
+    if (incoming.url === `${runtimePrefix}/opencode/session` && incoming.method === "POST") {
       await body(incoming);
       json(outgoing, 201, { id: "runtime-session-1", status: "created" });
       return;
     }
-    if (incoming.url?.startsWith("/files/content") && incoming.method === "GET") {
+    if (incoming.url?.startsWith(`${runtimePrefix}/files/content`) && incoming.method === "GET") {
       json(outgoing, 200, { path: new URL(incoming.url, "http://runtime.test").searchParams.get("path"), content: "approved content\n" });
       return;
     }
-    if (incoming.url?.startsWith("/files/content") && incoming.method === "PUT") {
+    if (incoming.url?.startsWith(`${runtimePrefix}/files/content`) && incoming.method === "PUT") {
       const parsed: unknown = JSON.parse(await body(incoming));
       const payload = object(parsed);
       json(outgoing, 200, { path: new URL(incoming.url, "http://runtime.test").searchParams.get("path"), content: payload.content });
@@ -143,6 +145,7 @@ test("fresh installation completes bootstrap, invitation, scoped file access, an
     expect(workspaceResponse.status).toBe(201);
     const registered = object(await workspaceResponse.json());
     const workspaceId = stringValue(object(registered.workspace).id, "workspace id");
+    runtimeWorkspaceId = workspaceId;
 
     const grant = await request(application, `/api/v1/workspaces/${workspaceId}/access`, {
       method: "POST",

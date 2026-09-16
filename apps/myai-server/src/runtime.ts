@@ -4,7 +4,7 @@ import type { MyaiLogger } from "./logger.js";
 export interface ExecutionBackend {
   readonly kind: "local";
   ready(): Promise<boolean>;
-  proxy(request: Request, runtimePath: string): Promise<Response>;
+  proxy(request: Request, workspaceId: string, runtimePath: string): Promise<Response>;
 }
 
 const forwardedRequestHeaders = new Set(["accept", "content-type"]);
@@ -20,8 +20,8 @@ export function createLocalExecutionBackend(config: MyaiConfig, logger: MyaiLogg
         return false;
       }
     },
-    async proxy(request, runtimePath) {
-      const target = new URL(runtimePath, `${config.runtimeBaseUrl}/`);
+    async proxy(request, workspaceId, runtimePath) {
+      const target = new URL(`/workspace/${encodeURIComponent(workspaceId)}${runtimePath}`, `${config.runtimeBaseUrl}/`);
       const headers = new Headers();
       for (const [key, value] of request.headers) {
         if (forwardedRequestHeaders.has(key.toLowerCase())) headers.set(key, value);
