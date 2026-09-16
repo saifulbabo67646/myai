@@ -3451,11 +3451,12 @@ export function SessionRoute() {
       providers={providers}
       mcpConnectedCount={mcpConnectedCount}
       onSendFeedback={() => {
-        platform.openLink(
-          buildFeedbackUrl({
-            entrypoint: "status-bar",
-          }),
-        );
+        // No feedback endpoint is configured in a myai release build, so the
+        // affordance stays inert instead of opening a blank or borrowed page.
+        const url = buildFeedbackUrl({
+          entrypoint: "status-bar",
+        });
+        if (url) platform.openLink(url);
       }}
       onOpenSettings={() => handleOpenSettings("/settings/general")}
       onOpenExtensions={() => handleOpenExtensions()}

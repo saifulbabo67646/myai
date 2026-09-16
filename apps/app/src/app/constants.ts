@@ -162,11 +162,11 @@ export const MCP_QUICK_CONNECT: McpDirectoryInfo[] = [
       // full catalog at bare /mcp. getDenMcpUrl heals stale web-app origins;
       // never at the web app's root (see
       // packages/docs/cloud/run-in-the-cloud/cloud-mcp.mdx).
-      try {
-        return `${getDenMcpUrl()}/agent`;
-      } catch {
-        return "https://api.app.openworklabs.com/mcp/agent";
-      }
+      // An empty URL means no control plane is configured (the myai ship
+      // state): the entry stays unconnectable instead of falling back to a
+      // host nobody chose.
+      const mcpUrl = getDenMcpUrl();
+      return mcpUrl ? `${mcpUrl}/agent` : "";
     },
     type: "remote",
     oauth: true,

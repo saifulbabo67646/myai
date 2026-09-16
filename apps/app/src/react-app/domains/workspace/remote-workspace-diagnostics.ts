@@ -104,7 +104,9 @@ function rejectedTokenMessage(target: RemoteWorkspaceConnectionTarget) {
 }
 
 function remoteSupportMessage(message: string) {
-  return `${message} Upgrade the OpenWork host and try again. If this continues, contact team@openworklabs.com.`;
+  // myai ships no OpenWork support channel: keep the actionable upgrade advice
+  // (it names the connected host generically) and drop the borrowed address.
+  return `${message} Upgrade the remote host and try again, or ask your myai server administrator to check it.`;
 }
 
 export function redactRemoteDiagnosticText(value: string): string {

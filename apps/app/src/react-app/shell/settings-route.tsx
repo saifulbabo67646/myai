@@ -2368,7 +2368,12 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
           <GeneralSettingsView
             onNavigateTab={(tab) => navigateSettingsPath(tab)}
             developerMode={developerMode}
-            onSendFeedback={() => platform.openLink(buildFeedbackUrl({ entrypoint: "settings" }))}
+            onSendFeedback={() => {
+              // No feedback endpoint is configured in a myai release build, so
+              // the button stays inert rather than opening a borrowed page.
+              const url = buildFeedbackUrl({ entrypoint: "settings" });
+              if (url) platform.openLink(url);
+            }}
             onJoinDiscord={() => platform.openLink("https://discord.gg/VEhNQXxYMB")}
             onReportIssue={() => platform.openLink("https://github.com/different-ai/openwork/issues/new?template=bug.yml")}
           />

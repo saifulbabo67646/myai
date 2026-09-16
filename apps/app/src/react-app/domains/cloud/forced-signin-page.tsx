@@ -73,12 +73,20 @@ export function ForcedSigninPage({ developerMode }: ForcedSigninPageProps) {
   }, [appName]);
 
   const openControlPlane = useCallback(() => {
-    platform.openLink(resolveDenBaseUrls(baseUrl).baseUrl);
+    // No configured control plane means nothing to open: stay inert rather
+    // than opening a blank or borrowed page.
+    const resolved = resolveDenBaseUrls(baseUrl).baseUrl;
+    if (!resolved) return;
+    platform.openLink(resolved);
   }, [baseUrl, platform]);
 
   const openBrowserAuth = useCallback(
     (mode: "sign-in" | "sign-up") => {
       const url = buildDenAuthUrl(baseUrl, mode);
+      if (!url) {
+        setAuthError(t("den.error_base_url"));
+        return;
+      }
       markDesktopSignInInitiated();
       setSigninFallbackUrl(url);
       setStatusMessage(

@@ -183,7 +183,7 @@ function sanitizedInspectorDiagnosticText(value: string) {
 
 const MARKDOWN_PRIMITIVE_EVAL_TEXT = `# Markdown proof heading
 
-This shared renderer keeps **bold proof text**, inline \`renderMarkdownHtml\`, and [myai link](https://openworklabs.com) readable in one message.
+This shared renderer keeps **bold proof text**, inline \`renderMarkdownHtml\`, and [myai link](https://example.test/docs) readable in one message.
 
 \`\`\`ts
 const pipeline = "shared markdown primitive";
@@ -369,7 +369,7 @@ function createChatTranscriptEvalMessages(sessionId: string) {
         },
         {
           type: "text",
-          text: "Your plan is drafted — details in [myai](https://openworklabs.com). Search token: chat-transcript-proof.",
+          text: "Your plan is drafted — details in [myai](https://example.test/docs). Search token: chat-transcript-proof.",
         },
       ],
       // `completed` makes the finished turn fold behind a real

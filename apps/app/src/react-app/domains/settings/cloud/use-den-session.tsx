@@ -216,12 +216,20 @@ export function useDenSession({
   }, [syncCurrentDenSettings]);
 
   const openControlPlane = React.useCallback(() => {
-    openLink(resolveDenBaseUrls(baseUrl).baseUrl);
+    // No configured control plane means nothing to open: stay inert rather
+    // than opening a blank or borrowed page.
+    const resolved = resolveDenBaseUrls(baseUrl).baseUrl;
+    if (!resolved) return;
+    openLink(resolved);
   }, [baseUrl, openLink]);
 
   const openBrowserAuth = React.useCallback(
     (mode: "sign-in" | "sign-up") => {
       const url = buildDenAuthUrl(baseUrl, mode);
+      if (!url) {
+        setAuthError(t("den.error_base_url"));
+        return;
+      }
       const usesPasteHandoff = new URL(url).searchParams.get("desktopAuth") === "1";
       markDesktopSignInInitiated();
       setSigninFallbackUrl(url);

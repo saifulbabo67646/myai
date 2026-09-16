@@ -23,9 +23,9 @@ const ENV_APP_VERSION = String(import.meta.env.VITE_OPENWORK_APP_VERSION ?? "").
 
 const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com";
 
-// Packaged releases use the default publishable key; dev builds stay silent
-// unless VITE_OPENWORK_POSTHOG_KEY is set. Set it to "" to disable analytics
-// in any build. The inspector mirror still records events locally either way.
+// myai ships no analytics key: `VITE_OPENWORK_POSTHOG_KEY` must be supplied by
+// the distribution, otherwise analytics stays silent in every build. The
+// inspector mirror still records events locally either way.
 const POSTHOG_KEY = resolvePosthogKey(import.meta.env.VITE_OPENWORK_POSTHOG_KEY, import.meta.env.DEV);
 const POSTHOG_HOST = (ENV_POSTHOG_HOST || DEFAULT_POSTHOG_HOST).replace(/\/+$/, "");
 
