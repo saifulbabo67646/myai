@@ -27,6 +27,7 @@ import {
   prefetchCloudInventory,
 } from "../domains/connections/cloud-inventory-cache";
 import { ForcedSigninPage } from "../domains/cloud/forced-signin-page";
+import { MyaiTeamWorkspacePage } from "../domains/cloud/myai-team-workspace-page";
 import { EnterpriseActivationGate } from "../domains/cloud/enterprise-activation-gate";
 import { OpenWorkWebAccessGate } from "../domains/cloud/openwork-web-access-gate";
 import { OrgOnboardingPage } from "../domains/cloud/org-onboarding-page";
@@ -93,6 +94,7 @@ function DenSigninGate({ children }: DenSigninGateProps) {
     readDenBootstrapSnapshot,
   );
   const requireSignin = bootstrap.requireSignin;
+  const isTeamDesktop = String(readDesktopDistributionInfo().flavor) === "team";
   const path = location.pathname.toLowerCase();
   const onSignin = path === "/signin" || path.startsWith("/signin/");
   const onOnboarding = path === "/onboarding" || path.startsWith("/onboarding/");
@@ -115,9 +117,11 @@ function DenSigninGate({ children }: DenSigninGateProps) {
         navigate("/signin", { replace: true });
       } else if (denAuth.isSignedIn && onSignin) {
         navigate(
-          signedInRoute(readDenSettings().activeOrgId, {
-            orgSelectionPending: readOrgSelectionPending().pending,
-          }),
+          isTeamDesktop
+            ? "/team"
+            : signedInRoute(readDenSettings().activeOrgId, {
+                orgSelectionPending: readOrgSelectionPending().pending,
+              }),
           { replace: true },
         );
       }
@@ -148,6 +152,7 @@ function DenSigninGate({ children }: DenSigninGateProps) {
     navigate,
     onOnboarding,
     onSignin,
+    isTeamDesktop,
     requireSignin,
   ]);
 
@@ -454,6 +459,14 @@ export function AppRoot() {
                 element={
                   <DevProfiler id="OrgOnboarding">
                     <OrgOnboardingPage />
+                  </DevProfiler>
+                }
+              />
+              <Route
+                path="/team"
+                element={
+                  <DevProfiler id="MyaiTeamWorkspace">
+                    <MyaiTeamWorkspacePage />
                   </DevProfiler>
                 }
               />
