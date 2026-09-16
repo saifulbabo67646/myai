@@ -1,0 +1,137 @@
+# myai server image — self-hosted single-team control plane (WP-7, docs/myai-plan.md §4.7).
+#
+# Two targets ship from this one file:
+#   control-plane (default) — the myai control plane, `node dist/index.js`.
+#   runtime                 — the MIT `openwork-server` runtime, `bun dist/cli.js`.
+#
+# Both are built from this repository's own sources with the repo toolchain
+# (Node 24, pnpm 11.4.0, Bun 1.3.10). No npm, no yarn, and nothing is downloaded
+# from a release repository.
+#
+# Build from the repository root:
+#   docker build -f packaging/docker/Dockerfile.myai-server -t myai-server:local .
+#   docker build -f packaging/docker/Dockerfile.myai-server --target runtime -t myai-runtime:local .
+
+# syntax=docker/dockerfile:1
+
+ARG NODE_IMAGE=node:24-bookworm-slim
+ARG BUN_IMAGE=oven/bun:1.3.10
+
+# ---------------------------------------------------------------------------
+# toolchain — pinned package manager and the native-module compiler. Build-time
+# only: no shipped stage is derived from it.
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS toolchain
+
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare pnpm@11.4.0 --activate
+# better-sqlite3 has no prebuilt binary for every Node ABI and falls back to
+# node-gyp, which needs a compiler and Python.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------------------
+# bun — the runtime target's engine, from the pinned official image
+# ---------------------------------------------------------------------------
+FROM ${BUN_IMAGE} AS bun
+
+# ---------------------------------------------------------------------------
+# deps — the control plane's production dependency closure. Every import of
+# @myai/server is a production dependency, so this stage is all it needs.
+# ---------------------------------------------------------------------------
+FROM toolchain AS deps
+
+WORKDIR /app
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY patches ./patches
+COPY apps/myai-server/package.json apps/myai-server/
+RUN pnpm install --frozen-lockfile --prod --filter @myai/server...
+
+# ---------------------------------------------------------------------------
+# build — the whole workspace these two targets need, compiled
+# ---------------------------------------------------------------------------
+FROM toolchain AS build
+
+# The runtime's build step bundles its OpenCode plugins with bun.
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+WORKDIR /app
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json constants.json ./
+COPY patches ./patches
+COPY apps/myai-server ./apps/myai-server
+COPY apps/server ./apps/server
+COPY packages ./packages
+RUN pnpm install --frozen-lockfile \
+      --filter @myai/server... \
+      --filter openwork-server...
+RUN pnpm --filter @myai/server build \
+ && pnpm --filter openwork-server build
+
+# ---------------------------------------------------------------------------
+# runtime — the MIT openwork-server runtime, loopback / private network only
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS runtime
+
+LABEL org.opencontainers.image.title="myai runtime" \
+      org.opencontainers.image.description="MIT openwork-server runtime for a myai installation" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/saifulbabo67646/myai"
+
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+RUN groupadd --system --gid 10001 myai \
+ && useradd --system --uid 10001 --gid myai --home-dir /var/lib/myai --shell /usr/sbin/nologin myai \
+ && mkdir -p /srv/myai/workspaces \
+ && chown -R myai:myai /srv/myai
+WORKDIR /app
+# The runtime's own dependency closure comes from the build stage: openwork-server
+# imports @openwork/paths, which its manifest declares as a devDependency, from
+# modules on its runtime path (config, server, tokens, runtime-db). Until that
+# manifest is corrected upstream, a --prod install would ship a runtime that
+# cannot start.
+COPY --from=build /app/package.json /app/pnpm-workspace.yaml /app/constants.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/apps/server ./apps/server
+# Most @openwork/types export conditions resolve to TypeScript source, so the
+# workspace packages keep their sources next to their built output.
+COPY --from=build /app/packages ./packages
+WORKDIR /app/apps/server
+USER myai
+# Loopback by default. A deployment that puts this container on an isolated
+# container network has to say so explicitly.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.MYAI_RUNTIME_PORT||'8787')+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+EXPOSE 8787
+CMD ["bun", "dist/cli.js", "--host", "127.0.0.1", "--port", "8787", "--workspace", "/srv/myai/workspaces", "--no-log-requests"]
+
+# ---------------------------------------------------------------------------
+# control-plane — the myai server image (default target)
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS control-plane
+
+LABEL org.opencontainers.image.title="myai server" \
+      org.opencontainers.image.description="Self-hosted single-team myai control plane" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/saifulbabo67646/myai"
+
+ENV NODE_ENV=production \
+    MYAI_ENV=production
+# The data directory is the persistent control-data volume. Docker seeds a fresh
+# named volume from this path, ownership included, so the unprivileged user
+# below can write to it.
+RUN groupadd --system --gid 10001 myai \
+ && useradd --system --uid 10001 --gid myai --home-dir /var/lib/myai --shell /usr/sbin/nologin myai \
+ && mkdir -p /var/lib/myai/data /srv/myai/workspaces \
+ && chown -R myai:myai /var/lib/myai /srv/myai
+WORKDIR /app
+COPY --from=deps /app ./
+COPY --from=build /app/apps/myai-server/dist ./apps/myai-server/dist
+WORKDIR /app/apps/myai-server
+USER myai
+# Liveness only: the process answers. Readiness — which also needs the loopback
+# runtime — is /readyz, used as the compose service health check.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.MYAI_PORT||'8788')+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+EXPOSE 8788
+CMD ["node", "dist/index.js"]

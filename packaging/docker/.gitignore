@@ -1,0 +1,11 @@
+# Local deployment state and secrets. The template next to this file
+# (.env.example) is the only env file that belongs in git; a filled-in copy
+# holds the session and bootstrap secrets.
+.env
+
+# TLS material mounted read-only into the proxy profile.
+tls/
+
+# Workspace storage, backups, and anything else an operator creates here.
+workspaces/
+backups/
