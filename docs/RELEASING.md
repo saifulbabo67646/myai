@@ -1,4 +1,4 @@
-# Releasing OpenWork
+# Releasing myai
 
 Releases are **pure GitHub Actions + GitHub Releases**: versions live in git
 tags, every committed `package.json` holds the permanent `0.0.0-dev`
