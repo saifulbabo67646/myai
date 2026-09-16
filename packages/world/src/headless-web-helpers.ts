@@ -50,10 +50,23 @@ export function buildDetachedRespawnArgs(argv: string[]): string[] {
   return argv.filter((arg) => arg !== "--detach");
 }
 
-export function normalizeDenTarget(value: string | undefined): string {
-  const raw = (value ?? "https://app.openworklabs.com").trim();
+/**
+ * Normalize an explicitly configured den/control-plane target.
+ *
+ * myai ships no default target: an unset (or blank) value means "disabled", so
+ * a headless world boots with no control plane and the app hides every cloud
+ * surface. A world points at a real control plane by setting
+ * `OPENWORK_DEV_DEN_PROXY_TARGET` (e.g. a local or team myai server).
+ */
+export function normalizeDenTarget(value: string | undefined): string | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  return new URL(withProtocol).origin;
+  try {
+    return new URL(withProtocol).origin;
+  } catch {
+    throw new Error(`Invalid den target ${JSON.stringify(raw)}: expected an http(s) origin.`);
+  }
 }
 
 export function isHeadlessStackCommand(command: string): boolean {

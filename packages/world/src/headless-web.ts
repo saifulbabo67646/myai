@@ -32,7 +32,6 @@ import { headlessBrowserEnvironment } from "./headless-browser.ts";
 
 const DEFAULT_WEB_PORT = "5178";
 const DEFAULT_SERVER_PORT = "8778";
-const DEFAULT_DEN_TARGET = "https://app.openworklabs.com";
 
 export interface HeadlessWebLaunchOptions {
   repoRoot: string;
@@ -805,8 +804,11 @@ export async function launchHeadlessWeb(options: HeadlessWebLaunchOptions): Prom
     ...browserEnv,
     ...(denTarget && denApiUrl ? {
       OPENWORK_DEV_HEADLESS_DEN_TARGET: denTarget,
+      // Both ends are configured together: the API pin routes Den API calls
+      // through the same-origin proxy, and the web base names the control plane
+      // the app signs in to. myai ships no default for either.
       VITE_DEN_API_BASE_URL: env.VITE_DEN_API_BASE_URL ?? denApiUrl,
-      ...(denTarget === DEFAULT_DEN_TARGET ? {} : { VITE_DEN_BASE_URL: env.VITE_DEN_BASE_URL ?? denTarget }),
+      VITE_DEN_BASE_URL: env.VITE_DEN_BASE_URL ?? denTarget,
     } : {}),
   };
   const headlessEnv: NodeJS.ProcessEnv = {

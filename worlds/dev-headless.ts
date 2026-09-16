@@ -31,6 +31,9 @@ function outputs(handle: HeadlessWebHandle): Record<string, string> {
     openworkUrl: handle.manifest.openworkUrl,
     workspace: handle.manifest.workspace,
     runtimeManifest: handle.manifest.runtimeManifestPath,
+    // myai ships no control plane: an unconfigured world reports it explicitly
+    // instead of leaving the reader to guess from a missing key.
+    denTarget: handle.manifest.denTarget ?? "disabled",
   };
 }
 
