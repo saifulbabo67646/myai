@@ -30,7 +30,7 @@ describe("extension taxonomy", () => {
     expect(primaryLibraryFilter("app")).toBe("mcp");
   });
 
-  test("the MCPs category lists third-party servers, not OpenWork's own runtimes or plumbing", () => {
+  test("the MCPs category lists third-party servers, not myai's own runtimes or plumbing", () => {
     const listed = MCP_QUICK_CONNECT.filter(isLibraryMcpDirectoryEntry).map((entry) => entry.name);
     expect(listed).toEqual(["Notion", "Linear", "Sentry", "Stripe", "Context7"]);
     for (const id of ["openwork-browser", "computer-use", "ollama"]) {

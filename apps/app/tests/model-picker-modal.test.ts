@@ -353,7 +353,7 @@ test("long picker labels retain full hover text and select the complete model ID
   };
   try {
     await act(async () => root.render(createElement(PlatformProvider, { value: createDefaultPlatform(), children: createElement(Picker) })));
-    for (const text of [providerName, organization, "via OpenWork Gateway", title, modelID]) {
+    for (const text of [providerName, organization, "via myai Gateway", title, modelID]) {
       expect(label(text)?.textContent).toBe(text);
     }
     const header = label(providerName)?.closest("button");
@@ -400,7 +400,7 @@ describe("model picker provider badges", () => {
       isGateway: gatewayProviderIds.has("ipr_gateway"),
       hasCurrent: false,
     });
-    expect(gateway).toEqual(["Acme", "via OpenWork Gateway"]);
+    expect(gateway).toEqual(["Acme", "via myai Gateway"]);
 
     const organization = labels({
       isNew: false,
@@ -409,7 +409,7 @@ describe("model picker provider badges", () => {
       hasCurrent: true,
     });
     expect(organization).toEqual(["Acme", "Current"]);
-    expect(organization).not.toContain("via OpenWork Gateway");
+    expect(organization).not.toContain("via myai Gateway");
   });
 });
 

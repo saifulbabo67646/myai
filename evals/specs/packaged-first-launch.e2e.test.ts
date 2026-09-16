@@ -24,7 +24,7 @@ const FIRST_LAUNCH_HEADING: Partial<Record<PackagedFlavor, string>> = {
 };
 
 /** Heading of the root error boundary's recovery screen (app-error-boundary.tsx). */
-const RECOVERY_HEADING = /OpenWork hit an unexpected error|OpenWork couldn't start/;
+const RECOVERY_HEADING = /myai hit an unexpected error|OpenWork couldn't start/;
 
 /** Bounded observation window, not a guarantee against faults after it ends. */
 const REJECTION_SETTLE_MS = 3_000;

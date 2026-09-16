@@ -132,7 +132,7 @@ test("desktop registration recovers from a transient Den outage without another 
   await clickText(desktop, "Registration recovery receipts", { selector: "button" })
   await waitForText(desktop, "Run history")
   await go(desktop, `/automations?automation=${automationId}&run=${missed.id}`)
-  const guidance = "Keep OpenWork open, signed in, and your computer awake and connected for future runs."
+  const guidance = "Keep myai open, signed in, and your computer awake and connected for future runs."
   for (const { run, title, variant } of cases) {
     if (run.id !== missed.id) {
       await go(desktop, `/automations?automation=${automationId}&run=${run.id}`)

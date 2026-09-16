@@ -23,7 +23,7 @@ const updateTest = spec.world(releasedEnterpriseActivatedWorld, {
 /** Heading of the enterprise activation page (enterprise-activation-gate.tsx); an activated install must not show it. */
 const ACTIVATION_HEADING = "Link this app to your organization";
 /** Heading of the root error boundary's recovery screen (app-error-boundary.tsx). */
-const RECOVERY_HEADING = /OpenWork hit an unexpected error/;
+const RECOVERY_HEADING = /myai hit an unexpected error/;
 /** The forced sign-in surface (den-signin-surface.tsx, fullscreen variant). */
 const SIGN_IN_BUTTON = /^Sign in to /m;
 

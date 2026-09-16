@@ -70,7 +70,7 @@ const permissionsTab: { role: "tab"; label: string } = { role: "tab", label: "Ap
 const accountTab: { role: "tab"; label: string } = { role: "tab", label: "Account" };
 const signOut: { role: "button"; label: string } = { role: "button", label: "Sign out" };
 const manageExtensionsNotice = { testId: "manage-extensions-policy-notice" };
-const builtInExtensionsNotice = "Built-in OpenWork extensions are disabled by your organization";
+const builtInExtensionsNotice = "Built-in myai extensions are disabled by your organization";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

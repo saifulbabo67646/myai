@@ -201,7 +201,7 @@ describe("reportCaughtWebError", () => {
           await act(async () => {
             root.render(createElement(AppErrorBoundary, { key: `${index}-${attempt}` }, createElement(Throws)));
           });
-          expect(container.textContent).toContain("OpenWork hit an unexpected error");
+          expect(container.textContent).toContain("myai hit an unexpected error");
           expect(bodies).toHaveLength(index + 2);
         }
         const body = bodies[index + 1];

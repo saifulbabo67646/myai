@@ -12,7 +12,7 @@ const test = spec.world(crashRecoveryWorld, {
   // Real app source in a standalone Chrome; no Den, mock services or Electron.
   resources: { surfaces: ['appWeb'], services: [] },
 });
-const heading = 'OpenWork hit an unexpected error';
+const heading = 'myai hit an unexpected error';
 const safeMessage = 'synthetic ordinary failure';
 const safeStack = `Error: ${safeMessage}\n    at SyntheticChild (file:///synthetic/source.tsx:12:34)`;
 const settle = () => new Promise<void>(resolve => setTimeout(resolve, 350));

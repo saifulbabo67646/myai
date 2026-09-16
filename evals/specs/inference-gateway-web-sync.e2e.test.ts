@@ -3,7 +3,7 @@ import { denFetch, grantOpenWorkWebAccess } from "@openwork/behaviors";
 import type { DenSession } from "@openwork/behaviors";
 import { eventually, needs, server, SkipError, test } from "@openwork/testkit";
 
-const PROVIDER_NAME = "Anthropic via OpenWork Gateway";
+const PROVIDER_NAME = "Anthropic via myai Gateway";
 const PROVIDER_ID = "anthropic";
 const UPSTREAM_SECRET = "sk-ant-fake-upstream-key-never-reaches-a-worker";
 const GATEWAY_ORIGIN = "http://127.0.0.1:18791";
