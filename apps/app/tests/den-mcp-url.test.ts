@@ -8,21 +8,49 @@ import {
   resolveDenBaseUrls,
 } from "../src/app/lib/den";
 
+/**
+ * The hosted origin used to prove the redirect machinery is configuration
+ * driven. It is deliberately not a real deployment: `den.ts` reads
+ * `VITE_DEN_HOSTED_BASE_URL` at module load, so each configured case imports a
+ * fresh module instance with the variable set (bun's `import.meta.env` is a
+ * live view of `process.env`).
+ */
+const HOSTED_ORIGIN = "https://app.team.example.test";
+
+/**
+ * Import a fresh `den.ts` instance with the given build configuration.
+ * `cacheKey` must be unique per configuration: the query only cache-busts the
+ * module, and it stays free of URL characters so bun's resolver treats it as
+ * the same file with a distinct instance.
+ */
+async function importConfigured(cacheKey: string, config: { hostedOrigin?: string; baseUrl?: string } = {}) {
+  if (config.hostedOrigin === undefined) delete process.env.VITE_DEN_HOSTED_BASE_URL;
+  else process.env.VITE_DEN_HOSTED_BASE_URL = config.hostedOrigin;
+  if (config.baseUrl === undefined) delete process.env.VITE_DEN_BASE_URL;
+  else process.env.VITE_DEN_BASE_URL = config.baseUrl;
+  try {
+    return await import(`../src/app/lib/den.ts?configured=${cacheKey}`);
+  } finally {
+    delete process.env.VITE_DEN_HOSTED_BASE_URL;
+    delete process.env.VITE_DEN_BASE_URL;
+  }
+}
+
 describe("resolveDenBaseUrls", () => {
   test("adds the API proxy path to an explicit API base URL", () => {
     const resolved = resolveDenBaseUrls({
-      baseUrl: "https://app.openworklabs.com",
-      apiBaseUrl: "https://app.openworklabs.com",
+      baseUrl: "https://den.example.test",
+      apiBaseUrl: "https://den.example.test",
     });
-    expect(resolved.apiBaseUrl).toBe("https://app.openworklabs.com");
+    expect(resolved.apiBaseUrl).toBe("https://den.example.test");
   });
 
   test("keeps an explicit API origin independent from the web base URL", () => {
     const resolved = resolveDenBaseUrls({
-      baseUrl: "https://app.openworklabs.com",
+      baseUrl: "https://den.example.test",
       apiBaseUrl: "https://api.example.com",
     });
-    expect(resolved.baseUrl).toBe("https://app.openworklabs.com");
+    expect(resolved.baseUrl).toBe("https://den.example.test");
     expect(resolved.apiBaseUrl).toBe("https://api.example.com");
   });
 
@@ -47,36 +75,65 @@ describe("resolveDenBaseUrls", () => {
     expect(resolved.apiBaseUrl).toBe("https://api.den.example");
   });
 
-  test("derives the api subdomain for hosted openworklabs.com deployments", () => {
-    const resolved = resolveDenBaseUrls({ baseUrl: "https://staging.openworklabs.com" });
-    expect(resolved.baseUrl).toBe("https://staging.openworklabs.com");
-    expect(resolved.apiBaseUrl).toBe("https://api.staging.openworklabs.com");
+  test("invents no api sibling for a web-app-shaped origin when no hosted origin is declared", () => {
+    const resolved = resolveDenBaseUrls({ baseUrl: HOSTED_ORIGIN });
+    expect(resolved.baseUrl).toBe(HOSTED_ORIGIN);
+    expect(resolved.apiBaseUrl).toBe(`${HOSTED_ORIGIN}/api/den`);
+  });
+});
+
+describe("hosted-origin configuration", () => {
+  test("ships no default control-plane host and no cloud endpoints", async () => {
+    const mod = await importConfigured("defaults");
+    expect(mod.DEFAULT_DEN_BASE_URL).toBe("");
+    expect(mod.getDenMcpUrl()).toBe("");
+    expect(mod.buildDenAuthUrl("", "sign-in")).toBe("");
+    expect(mod.isSelfHostedControlPlane()).toBe(true);
+    expect(mod.hasConfiguredControlPlane("")).toBe(false);
   });
 
-  test("uses the nested hosted API origin for the hosted web default", () => {
-    const resolved = resolveDenBaseUrls({ baseUrl: "https://app.openworklabs.com" });
-    expect(resolved.baseUrl).toBe("https://app.openworklabs.com");
-    expect(resolved.apiBaseUrl).toBe("https://api.app.openworklabs.com");
+  test("derives the api sibling from the configured hosted origin, not from a host literal", async () => {
+    const mod = await importConfigured("hosted", { hostedOrigin: HOSTED_ORIGIN, baseUrl: HOSTED_ORIGIN });
+    expect(mod.resolveDenBaseUrls({ baseUrl: HOSTED_ORIGIN }).apiBaseUrl).toBe(
+      "https://api.app.team.example.test",
+    );
+    // A look-alike host that is not the configured origin keeps its own proxy:
+    // nothing about the derivation is baked into the shipped source.
+    expect(mod.resolveDenBaseUrls({ baseUrl: "https://staging.team.example.test" }).apiBaseUrl).toBe(
+      "https://staging.team.example.test/api/den",
+    );
+    // Hosted-only surfaces unlock only when the build *is* the declared origin.
+    expect(mod.isSelfHostedControlPlane()).toBe(false);
+  });
+
+  test("treats the build's own configured server as self-hosted", async () => {
+    const mod = await importConfigured("team", { baseUrl: "https://myai.team.example.test" });
+    expect(mod.DEFAULT_DEN_BASE_URL).toBe("https://myai.team.example.test");
+    expect(mod.isSelfHostedControlPlane()).toBe(true);
   });
 });
 
 describe("getDenMcpUrl", () => {
-  test("never targets the bare web-app origin", () => {
-    const url = getDenMcpUrl();
-    expect(isLegacyWebAppMcpUrl(url)).toBe(false);
-    expect(url.endsWith("/mcp")).toBe(true);
+  test("returns no MCP endpoint while no control plane is configured", () => {
+    expect(getDenMcpUrl()).toBe("");
   });
 });
 
 describe("isLegacyWebAppMcpUrl", () => {
-  test("flags the legacy bare web-app MCP URL", () => {
-    expect(isLegacyWebAppMcpUrl("https://app.openworklabs.com/mcp")).toBe(true);
-    expect(isLegacyWebAppMcpUrl("https://app.openwork.software/mcp/")).toBe(true);
+  test("flags nothing while this build declares no hosted origin", () => {
+    // myai ships no hosted web app, so the old "app.* bare /mcp" heuristic no
+    // longer matches a borrowed host: a stale entry is left untouched rather
+    // than rewritten toward a host nobody configured.
+    expect(isLegacyWebAppMcpUrl(`${HOSTED_ORIGIN}/mcp`)).toBe(false);
   });
 
-  test("accepts valid MCP URLs", () => {
-    expect(isLegacyWebAppMcpUrl("https://app.openworklabs.com/api/den/mcp")).toBe(false);
-    expect(isLegacyWebAppMcpUrl("http://127.0.0.1:8787/mcp")).toBe(false);
+  test("flags the configured hosted web origin's bare /mcp path", async () => {
+    const mod = await importConfigured("hosted-legacy", { hostedOrigin: HOSTED_ORIGIN });
+    expect(mod.isLegacyWebAppMcpUrl(`${HOSTED_ORIGIN}/mcp`)).toBe(true);
+    expect(mod.isLegacyWebAppMcpUrl(`${HOSTED_ORIGIN}/api/den/mcp`)).toBe(false);
+    // The api sibling already serves the API, so it is never healed again.
+    expect(mod.isLegacyWebAppMcpUrl("https://api.app.team.example.test/mcp")).toBe(false);
+    expect(mod.isLegacyWebAppMcpUrl("http://127.0.0.1:8787/mcp")).toBe(false);
   });
 
   test("ignores empty or malformed input", () => {
@@ -86,24 +143,24 @@ describe("isLegacyWebAppMcpUrl", () => {
 });
 
 describe("resolveCloudMcpResourceUrl", () => {
-  test("heals hosted minted web-app resources to the direct API origin", () => {
-    expect(resolveCloudMcpResourceUrl("https://app.openworklabs.com/mcp")).toBe(
-      "https://api.app.openworklabs.com/mcp",
-    );
-    expect(resolveCloudMcpResourceUrl("https://app.openworklabs.com/api/den/mcp")).toBe(
-      "https://api.app.openworklabs.com/mcp",
-    );
+  test("keeps resources verbatim while no hosted origin is declared", () => {
+    expect(resolveCloudMcpResourceUrl(`${HOSTED_ORIGIN}/mcp`)).toBe(`${HOSTED_ORIGIN}/mcp`);
+    expect(resolveCloudMcpResourceUrl("https://api.den.example.test/mcp")).toBe("https://api.den.example.test/mcp");
   });
 
-  test("heals non-hosted legacy web-app resources through the /api/den proxy", () => {
-    expect(resolveCloudMcpResourceUrl("https://app.openwork.software/mcp/")).toBe(
-      "https://app.openwork.software/api/den/mcp",
+  test("heals the configured hosted minted web-app resources to the direct API origin", async () => {
+    const mod = await importConfigured("hosted-heal", { hostedOrigin: HOSTED_ORIGIN });
+    expect(mod.resolveCloudMcpResourceUrl(`${HOSTED_ORIGIN}/mcp`)).toBe(
+      "https://api.app.team.example.test/mcp",
+    );
+    expect(mod.resolveCloudMcpResourceUrl(`${HOSTED_ORIGIN}/api/den/mcp`)).toBe(
+      "https://api.app.team.example.test/mcp",
     );
   });
 
   test("keeps healthy resources verbatim", () => {
-    expect(resolveCloudMcpResourceUrl("https://api.app.openworklabs.com/mcp")).toBe(
-      "https://api.app.openworklabs.com/mcp",
+    expect(resolveCloudMcpResourceUrl("https://api.den.example.test/mcp")).toBe(
+      "https://api.den.example.test/mcp",
     );
     expect(resolveCloudMcpResourceUrl("https://app.example.com/api/den/mcp")).toBe(
       "https://app.example.com/api/den/mcp",
@@ -118,7 +175,7 @@ describe("resolveCloudMcpResourceUrl", () => {
     expect(resolveCloudMcpResourceUrl("")).toBeNull();
     expect(resolveCloudMcpResourceUrl("   ")).toBeNull();
     expect(resolveCloudMcpResourceUrl("not a url")).toBeNull();
-    expect(resolveCloudMcpResourceUrl("ftp://app.openworklabs.com/mcp")).toBeNull();
+    expect(resolveCloudMcpResourceUrl("ftp://app.openwork.test/mcp")).toBeNull();
   });
 });
 

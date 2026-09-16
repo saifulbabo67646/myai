@@ -135,30 +135,33 @@ briefTest(testBrief({
     "shipped sources carry no phc_ PostHog key, no sentry.io DSN, and no diagnostics collector host",
   );
 
-  // The release defaults must be empty (or distribution-supplied), never a
-  // literal host: den.ts, the Electron shell, the workspace store, the
-  // headless-world den target, and the health/catalog trust lists.
+  // Every shipped den/control-plane default must be *config-derived*, never a
+  // literal host: the renderer build default, the Electron shell fallback, the
+  // workspace store's hosted-candidate classification, and the headless-world
+  // den target all resolve to nothing until configuration supplies an origin.
   const denSource = readShipped("apps/app/src/app/lib/den.ts");
   expect(denSource).toMatch(/VITE_DEN_BASE_URL/);
-  expect(denSource).not.toMatch(/=\s*"[^"]*:\/\//);
   const desktopMain = readShipped("apps/desktop/electron/main.mjs");
-  expect(desktopMain).toMatch(/const DEFAULT_DEN_BASE_URL = ""/);
+  expect(desktopMain).toMatch(/const DEFAULT_DEN_BASE_URL = \(process\.env\.OPENWORK_DESKTOP_DEN_BASE_URL \?\? ""\)\.trim\(\)/);
   const workspaceStore = readShipped("apps/desktop/electron/workspace-store.mjs");
-  expect(workspaceStore).toMatch(/const HOSTED_DESKTOP_WEB_URL = ""/);
-  expect(workspaceStore).toMatch(/const HOSTED_DESKTOP_API_URL = ""/);
-  const headlessWeb = readShipped("packages/world/src/headless-web.ts");
-  expect(headlessWeb).toMatch(/const DEFAULT_DEN_TARGET = ""/);
+  expect(workspaceStore).toMatch(/function configuredHostedDesktopOrigins\(\)/);
+  expect(workspaceStore).toMatch(/process\.env\.OPENWORK_DESKTOP_HOSTED_BASE_URL/);
+  expect(workspaceStore).toMatch(/process\.env\.OPENWORK_DESKTOP_HOSTED_API_URL/);
   const headlessHelpers = readShipped("packages/world/src/headless-web-helpers.ts");
-  expect(headlessHelpers).not.toMatch(/value \?\? "https?:/);
-  const cloudProbe = readShipped("apps/server/src/agent-context-cloud-probe.ts");
-  expect(cloudProbe).not.toMatch(/openworklabs/);
-  const catalog = readShipped("apps/server/src/connect-mcp-server-catalog.ts");
-  expect(catalog).not.toMatch(/openworklabs/);
+  expect(headlessHelpers).toMatch(/export function normalizeDenTarget\(value: string \| undefined\): string \| null/);
+  expect(headlessHelpers).toMatch(/const raw = \(value \?\? ""\)\.trim\(\);\n  if \(!raw\) return null;/);
+  // No built-in borrowed origin may be trusted by the server-side probes: each
+  // list is either empty or populated from administrator configuration.
+  expect(readShipped("apps/server/src/agent-context-cloud-probe.ts")).toMatch(/const origins = new Set<string>\(\)/);
+  expect(readShipped("apps/server/src/connect-mcp-server-catalog.ts")).toMatch(/const BUILTIN_APP_HOST_CLOUD_ORIGINS = new Set<string>\(\)/);
+  expect(readShipped("apps/server/src/connect-mcp-server-catalog.ts")).toMatch(/const BUILTIN_APP_HOST_GATEWAY_PROXY_ORIGINS = new Map<string, string>\(\)/);
   const modelsUrl = readShipped("apps/server/src/opencode-models-url.ts");
-  expect(modelsUrl).not.toMatch(/openworklabs/);
+  expect(modelsUrl).toMatch(/const DEFAULT_MODELS_URL = ""/);
+  const feedback = readShipped("apps/app/src/app/lib/feedback.ts");
+  expect(feedback).toMatch(/export const DEFAULT_FEEDBACK_URL = ENV_FEEDBACK_URL/);
   prove.denTargetsHostFree(
     true,
-    "den.ts, main.mjs, workspace-store.mjs, headless-web.ts and the server trust lists hold no host literal",
+    "den.ts, main.mjs, workspace-store.mjs, headless-web-helpers.ts, the server trust lists and the models/feedback defaults all resolve to no host until configuration supplies one",
   );
 
   prove.buildConfigurableBaseUrl(

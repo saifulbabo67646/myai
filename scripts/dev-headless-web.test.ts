@@ -168,7 +168,7 @@ describe("dev-headless-web helpers", () => {
       runtimeManifestPath: "/repo/tmp/dev-headless-web.json",
       webLogPath: "/repo/tmp/dev-web.log",
       headlessLogPath: "/repo/tmp/dev-headless.log",
-      denTarget: "https://app.openworklabs.com",
+      denTarget: "https://myai.team.example.test",
       pid: 42,
       webPid: 43,
       openworkServerPid: 44,
@@ -177,7 +177,7 @@ describe("dev-headless-web helpers", () => {
 
     expect(manifest.mode).toBe("local-server");
     expect(manifest.healthUrl).toBe("http://127.0.0.1:8778/health");
-    expect(manifest.denTarget).toBe("https://app.openworklabs.com");
+    expect(manifest.denTarget).toBe("https://myai.team.example.test");
     expect(manifest.denApiUrl).toBe("http://127.0.0.1:5178/api/den");
     expect(manifest.token).toBe("client-token");
     expect(manifest.notes).toContain("same-origin");
@@ -202,14 +202,21 @@ describe("dev-headless-web helpers", () => {
     expect(manifest.denApiUrl).toBeNull();
   });
 
-  test("normalizes Den targets to origins", () => {
-    expect(normalizeDenTarget("https://app.openworklabs.com/api/den")).toBe(
-      "https://app.openworklabs.com",
+  test("normalizes a configured Den target to its origin and ships no default", () => {
+    expect(normalizeDenTarget("https://myai.team.example.test/api/den")).toBe(
+      "https://myai.team.example.test",
     );
     expect(normalizeDenTarget("http://127.0.0.1:3005")).toBe(
       "http://127.0.0.1:3005",
     );
-    expect(normalizeDenTarget(undefined)).toBe("https://app.openworklabs.com");
+    expect(normalizeDenTarget("myai.team.example.test")).toBe(
+      "https://myai.team.example.test",
+    );
+    // myai ships no control-plane host: an unset or blank target is disabled,
+    // not silently pointed at somebody else's deployment.
+    expect(normalizeDenTarget(undefined)).toBeNull();
+    expect(normalizeDenTarget("   ")).toBeNull();
+    expect(() => normalizeDenTarget("not a url")).toThrow(/Invalid den target/);
   });
 
   test("detached respawn forwards args except --detach", () => {

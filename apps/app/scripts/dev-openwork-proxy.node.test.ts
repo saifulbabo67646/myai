@@ -6,19 +6,24 @@ import { createServer as createViteServer, loadConfigFromFile } from "vite";
 import { devOpenworkProxy } from "../dev-openwork-proxy.ts";
 import { devDenProxy } from "../dev-den-proxy.ts";
 
-test("Den proxy maps only the normalized hosted origin and strips the exact prefix", () => {
+test("Den proxy uses the configured target verbatim and ships no default", () => {
+  // myai declares no hosted den origin: an unconfigured world proxies nothing,
+  // and every configured target — including one that merely looks hosted — is
+  // forwarded exactly as given, with no hidden remap and no path rewrite.
   assert.deepEqual(devDenProxy({}), {});
-  for (const target of ["https://app.openworklabs.com", " https://APP.openworklabs.com:443/ "]) {
-    const proxy = devDenProxy({ OPENWORK_DEV_HEADLESS_DEN_TARGET: target })["/api/den"];
-    assert.equal(proxy.target, "https://api.openworklabs.com");
-    assert.equal(proxy.changeOrigin, true);
-    assert(proxy.rewrite);
-    assert.equal(proxy.rewrite("/api/den/v1/me?x=a%2Fb&x=2"), "/v1/me?x=a%2Fb&x=2");
-    assert.equal(proxy.rewrite("/api/den"), "/");
-    assert.equal(proxy.rewrite("/api/den?x=1"), "?x=1");
-    assert.equal(proxy.rewrite("/api/denial/v1/me"), "/api/denial/v1/me");
-  }
-  for (const target of ["http://127.0.0.1:8788", "https://den.example.test", "https://app.openworklabs.com.evil.test", "https://sub.app.openworklabs.com", "https://app.openworklabs.com/path", "https://user:pass@app.openworklabs.com", "https://app.openworklabs.com?x=1", "https://app.openworklabs.com/#fragment", "http://app.openworklabs.com", "https://app.openworklabs.com:444"]) {
+  assert.deepEqual(devDenProxy({ OPENWORK_DEV_HEADLESS_DEN_TARGET: "   " }), {});
+  for (const target of [
+    "http://127.0.0.1:8788",
+    "https://den.example.test",
+    "https://myai.team.example.test",
+    "https://app.den.example.test",
+    "https://app.den.example.test/path",
+    "https://user:pass@app.den.example.test",
+    "https://app.den.example.test?x=1",
+    "https://app.den.example.test/#fragment",
+    "http://app.den.example.test",
+    "https://app.den.example.test:444",
+  ]) {
     assert.deepEqual(devDenProxy({ OPENWORK_DEV_HEADLESS_DEN_TARGET: target }), {
       "/api/den": { target, changeOrigin: true },
     });
@@ -36,8 +41,8 @@ test("Den HTTP proxy sends auth, cookies, method, body and query directly withou
   await new Promise<void>((resolve) => backend.listen(0, "127.0.0.1", resolve));
   const address = backend.address();
   assert(address && typeof address !== "string");
-  const proxy = devDenProxy({ OPENWORK_DEV_HEADLESS_DEN_TARGET: "https://app.openworklabs.com" })["/api/den"];
-  assert.equal(proxy.target, "https://api.openworklabs.com");
+  const proxy = devDenProxy({ OPENWORK_DEV_HEADLESS_DEN_TARGET: "https://myai.team.example.test" })["/api/den"];
+  assert.equal(proxy.target, "https://myai.team.example.test");
   const vite = await createViteServer({
     configFile: false, logLevel: "silent", server: { host: "127.0.0.1", port: 0,
       proxy: { "/api/den": { ...proxy, target: `http://127.0.0.1:${address.port}` } },
@@ -53,7 +58,7 @@ test("Den HTTP proxy sends auth, cookies, method, body and query directly withou
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("location"), null);
     assert.equal(await response.text(), "direct-api");
-    assert.deepEqual(received, [{ url: "/v1/me?x=a%2Fb", authorization: "Bearer fixture", cookie: "session=fixture", method: "POST", host: `127.0.0.1:${address.port}`, body: "fixture-body" }]);
+    assert.deepEqual(received, [{ url: "/api/den/v1/me?x=a%2Fb", authorization: "Bearer fixture", cookie: "session=fixture", method: "POST", host: `127.0.0.1:${address.port}`, body: "fixture-body" }]);
   } finally {
     await vite.close();
     await new Promise<void>((resolve) => backend.close(() => resolve()));
@@ -122,7 +127,7 @@ test("Vite same-origin proxy preserves client bearer auth on HTTP and WS without
 test("source Vite accepts a nonsecret host suffix and lets HMR derive the current location", async () => {
   const selected = {
     OPENWORK_DEV_MODE: "1", OPENWORK_DEV_OPENWORK_PROXY_TARGET: "http://127.0.0.1:8778",
-    OPENWORK_DEV_BROWSER_HOST_SUFFIX: ".example.test", OPENWORK_DEV_HEADLESS_DEN_TARGET: "https://app.openworklabs.com",
+    OPENWORK_DEV_BROWSER_HOST_SUFFIX: ".example.test", OPENWORK_DEV_HEADLESS_DEN_TARGET: "https://myai.team.example.test",
   };
   const previous = new Map(Object.keys(selected).map((key) => [key, process.env[key]]));
   Object.assign(process.env, selected);
@@ -134,7 +139,7 @@ test("source Vite accepts a nonsecret host suffix and lets HMR derive the curren
     assert(loaded.config.server?.proxy?.["/api/openwork"]);
     const denProxy = loaded.config.server?.proxy?.["/api/den"];
     assert(denProxy && typeof denProxy !== "string");
-    assert.equal(denProxy.target, "https://api.openworklabs.com");
+    assert.equal(denProxy.target, "https://myai.team.example.test");
     for (const environment of [{ command: "build", mode: "production" }, { command: "serve", mode: "production", isPreview: true }] satisfies Array<import("vite").ConfigEnv>) {
       const production = await loadConfigFromFile(environment, fileURLToPath(new URL("../vite.config.ts", import.meta.url)));
       assert(production);

@@ -474,11 +474,11 @@ test("explicit desktop bootstrap path never inherits legacy activation state", a
     const explicitPath = path.join(root, "isolated", "desktop-bootstrap.json");
     process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = explicitPath;
     await writeBootstrapConfig(legacyPath, {
-      baseUrl: "https://app.openworklabs.com",
+      baseUrl: "https://legacy-hosted.example.test",
       requireSignin: true,
       enterpriseActivation: {
         activatedAt: "2026-07-27T13:30:23.342Z",
-        denBaseUrl: "https://app.openworklabs.com/api/den",
+        denBaseUrl: "https://legacy-hosted.example.test/api/den",
       },
     });
 
@@ -505,49 +505,83 @@ test("explicit desktop bootstrap path still reads its configured bootstrap", asy
   });
 });
 
-test("desktop bootstrap prefers an older legacy organization config over a newer canonical hosted default", async () => {
-  await withIsolatedBootstrapStore(async ({ store, canonicalPath, legacyPath }) => {
-    await writeBootstrapConfig(canonicalPath, {
-      baseUrl: "https://app.openworklabs.com/api/den/",
-      apiBaseUrl: "https://api.unrelated.example",
-      requireSignin: false,
-      writtenAt: "2026-07-10T13:00:00.000Z",
-    });
-    await writeBootstrapConfig(legacyPath, {
-      baseUrl: "https://openwork.organization.internal.example",
-      apiBaseUrl: "https://api.organization.internal.example",
-      requireSignin: true,
-      writtenAt: "2026-07-09T12:00:00.000Z",
-    });
+test("desktop bootstrap prefers an older legacy organization config over a newer declared-hosted default", async () => {
+  // myai declares no hosted origin, so the "hosted default" class is
+  // config-declared here (OPENWORK_DESKTOP_HOSTED_BASE_URL) instead of matching
+  // a borrowed host literal.
+  process.env.OPENWORK_DESKTOP_HOSTED_BASE_URL = "https://hosted.desktop.example.test";
+  try {
+    await withIsolatedBootstrapStore(async ({ store, canonicalPath, legacyPath }) => {
+      await writeBootstrapConfig(canonicalPath, {
+        baseUrl: "https://hosted.desktop.example.test/api/den/",
+        apiBaseUrl: "https://api.unrelated.example",
+        requireSignin: false,
+        writtenAt: "2026-07-10T13:00:00.000Z",
+      });
+      await writeBootstrapConfig(legacyPath, {
+        baseUrl: "https://organization.internal.example",
+        apiBaseUrl: "https://api.organization.internal.example",
+        requireSignin: true,
+        writtenAt: "2026-07-09T12:00:00.000Z",
+      });
 
-    const config = await store.getDesktopBootstrapConfig();
-    assert.equal(config.baseUrl, "https://openwork.organization.internal.example");
-    assert.equal(config.fromFile, true);
-    const migrated = JSON.parse(await readFile(canonicalPath, "utf8"));
-    assert.equal(migrated.baseUrl, "https://openwork.organization.internal.example");
-  });
+      const config = await store.getDesktopBootstrapConfig();
+      assert.equal(config.baseUrl, "https://organization.internal.example");
+      assert.equal(config.fromFile, true);
+      const migrated = JSON.parse(await readFile(canonicalPath, "utf8"));
+      assert.equal(migrated.baseUrl, "https://organization.internal.example");
+    });
+  } finally {
+    delete process.env.OPENWORK_DESKTOP_HOSTED_BASE_URL;
+  }
 });
 
-test("desktop bootstrap keeps an older canonical organization config over a newer legacy hosted default", async () => {
+test("desktop bootstrap keeps an older canonical organization config over a newer declared-hosted default", async () => {
+  process.env.OPENWORK_DESKTOP_HOSTED_API_URL = "https://api.hosted.desktop.example.test";
+  try {
+    await withIsolatedBootstrapStore(async ({ store, canonicalPath, legacyPath }) => {
+      await writeBootstrapConfig(canonicalPath, {
+        baseUrl: "https://organization.internal.example",
+        apiBaseUrl: "https://api.organization.internal.example",
+        requireSignin: true,
+        writtenAt: "2026-07-09T12:00:00.000Z",
+      });
+      await writeBootstrapConfig(legacyPath, {
+        baseUrl: "https://api.hosted.desktop.example.test/v1/",
+        apiBaseUrl: "https://api.unrelated.example",
+        requireSignin: false,
+        writtenAt: "2026-07-10T13:00:00.000Z",
+      });
+
+      const config = await store.getDesktopBootstrapConfig();
+      assert.equal(config.baseUrl, "https://organization.internal.example");
+      assert.equal(config.fromFile, true);
+      const persisted = JSON.parse(await readFile(canonicalPath, "utf8"));
+      assert.equal(persisted.baseUrl, "https://organization.internal.example");
+    });
+  } finally {
+    delete process.env.OPENWORK_DESKTOP_HOSTED_API_URL;
+  }
+});
+
+test("desktop bootstrap has no built-in hosted default to prefer", async () => {
+  // With no declared hosted origin every candidate is equal class, so the
+  // newest write wins — a borrowed host is never preferred on its own.
   await withIsolatedBootstrapStore(async ({ store, canonicalPath, legacyPath }) => {
     await writeBootstrapConfig(canonicalPath, {
-      baseUrl: "https://openwork.organization.internal.example",
-      apiBaseUrl: "https://api.organization.internal.example",
-      requireSignin: true,
-      writtenAt: "2026-07-09T12:00:00.000Z",
-    });
-    await writeBootstrapConfig(legacyPath, {
-      baseUrl: "https://api.openworklabs.com/v1/",
-      apiBaseUrl: "https://api.unrelated.example",
+      baseUrl: "https://newer.example.test",
       requireSignin: false,
       writtenAt: "2026-07-10T13:00:00.000Z",
     });
+    await writeBootstrapConfig(legacyPath, {
+      baseUrl: "https://older.example.test",
+      requireSignin: true,
+      writtenAt: "2026-07-09T12:00:00.000Z",
+    });
 
     const config = await store.getDesktopBootstrapConfig();
-    assert.equal(config.baseUrl, "https://openwork.organization.internal.example");
+    assert.equal(config.baseUrl, "https://newer.example.test");
     assert.equal(config.fromFile, true);
-    const persisted = JSON.parse(await readFile(canonicalPath, "utf8"));
-    assert.equal(persisted.baseUrl, "https://openwork.organization.internal.example");
   });
 });
 

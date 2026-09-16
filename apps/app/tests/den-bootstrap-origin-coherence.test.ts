@@ -412,23 +412,24 @@ describe("den bootstrap and retained session origin coherence", () => {
     expect(readDenBootstrapConfig().apiBaseUrl).toBe(currentDen.url);
   });
 
-  test("an explicitly configured hosted session keeps working", async () => {
+  test("an explicitly configured control plane keeps its session working", async () => {
+    const configuredOrigin = "https://myai.team.example.test";
     const storage = installWindow({
       shell: {
-        reads: [{ kind: "config", config: { baseUrl: "https://app.openworklabs.com", requireSignin: false, fromFile: true } }],
+        reads: [{ kind: "config", config: { baseUrl: configuredOrigin, requireSignin: false, fromFile: true } }],
       },
     });
-    storage.setItem("openwork.den.authToken", "hosted-token-1");
-    storage.setItem("openwork.den.activeOrgId", "org_hosted_1");
-    storage.setItem(STORAGE_SESSION_ORIGIN, "https://app.openworklabs.com");
+    storage.setItem("openwork.den.authToken", "configured-token-1");
+    storage.setItem("openwork.den.activeOrgId", "org_configured_1");
+    storage.setItem(STORAGE_SESSION_ORIGIN, configuredOrigin);
 
     await initializeDenBootstrapConfig();
 
     expect(getDenBootstrapResolution()).toBe("resolved");
     const settings = readDenSettings();
-    expect(settings.baseUrl).toBe("https://app.openworklabs.com");
-    expect(settings.authToken).toBe("hosted-token-1");
-    expect(settings.activeOrgId).toBe("org_hosted_1");
+    expect(settings.baseUrl).toBe(configuredOrigin);
+    expect(settings.authToken).toBe("configured-token-1");
+    expect(settings.activeOrgId).toBe("org_configured_1");
   });
 
   test("a resolved bootstrap adopts a legacy untagged session for its proven origin", async () => {
@@ -452,9 +453,13 @@ describe("den bootstrap and retained session origin coherence", () => {
 
     const config = await initializeDenBootstrapConfig();
 
-    expect(config.baseUrl.length).toBeGreaterThan(0);
+    // myai ships no default control-plane host, so the in-memory placeholder is
+    // empty: the app stays fully usable locally, no cloud surface appears, and
+    // no credential-bearing request can be issued.
+    expect(config.baseUrl).toBe("");
     expect(getDenBootstrapResolution()).toBe("unresolved");
     const settings = readDenSettings();
+    expect(settings.baseUrl).toBe("");
     expect(settings.authToken).toBeNull();
     expect(await ensureDenActiveOrganization()).toBeNull();
     expect(credentialedFetches()).toEqual([]);

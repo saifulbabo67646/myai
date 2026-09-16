@@ -24,7 +24,7 @@ describe("agent diagnostics effective engine inspection", () => {
         mcp: {
           "openwork-cloud": {
             type: "remote",
-            url: "https://api.openworklabs.com/mcp/agent",
+            url: "https://den.trusted.example.test/mcp/agent",
             headers: { Authorization: "Bearer NOT_REPORTED" },
           },
         },

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -34,6 +34,7 @@ const workspace: WorkspaceInfo = {
 };
 
 const previousRuntimeDb = process.env.OPENWORK_RUNTIME_DB;
+const previousBootstrapPath = process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH;
 const previousFetch = globalThis.fetch;
 const roots: string[] = [];
 const runtimeDbRoots: string[] = [];
@@ -60,7 +61,27 @@ afterEach(async () => {
   }
   if (previousRuntimeDb === undefined) delete process.env.OPENWORK_RUNTIME_DB;
   else process.env.OPENWORK_RUNTIME_DB = previousRuntimeDb;
+  if (previousBootstrapPath === undefined) delete process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH;
+  else process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = previousBootstrapPath;
 });
+
+/**
+ * Declares the administrator-provisioned control-plane origin this install is
+ * activated against, by writing the JSON record the desktop writes after a
+ * signed activation claim verifies. myai ships no built-in cloud origin, so
+ * account-global persistence of a non-loopback endpoint needs this explicit
+ * configuration.
+ */
+async function activateTrustedControlPlane(root: string, origin: string): Promise<void> {
+  const bootstrapPath = join(root, "desktop-bootstrap.json");
+  await writeFile(bootstrapPath, JSON.stringify({
+    enterpriseActivation: {
+      activatedAt: "2026-01-01T00:00:00.000Z",
+      denBaseUrl: origin,
+    },
+  }));
+  process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = bootstrapPath;
+}
 
 async function createRoot(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
@@ -328,7 +349,7 @@ describe("cloud MCP health foundation", () => {
   test("desired revisions detect token changes without exposing reusable auth fingerprints", async () => {
     const config = {
       type: "remote",
-      url: "https://api.openworklabs.com/mcp/agent",
+      url: "https://den.trusted.example.test/mcp/agent",
       headers: { Authorization: "Bearer owt_super_secret" },
       oauth: false,
     };
@@ -396,8 +417,9 @@ describe("cloud MCP health foundation", () => {
     config.workspaces = [workspaceA, workspaceB, workspaceC];
     process.env.OPENWORK_RUNTIME_DB = await createRuntimeDbPath("openwork-cloud-migration-runtime-");
     // Trusted origins: promotion to account-global scope refuses anything else.
+    await activateTrustedControlPlane(root, "https://den.trusted.example.test");
     const older = { type: "remote", url: "http://127.0.0.1:4801/mcp/agent", enabled: true, headers: { Authorization: "Bearer older" }, oauth: false };
-    const newer = { ...older, url: "https://api.openworklabs.com/mcp/agent", headers: { Authorization: "Bearer newer" } };
+    const newer = { ...older, url: "https://den.trusted.example.test/mcp/agent", headers: { Authorization: "Bearer newer" } };
     await writeRuntimeOpencodeConfig(config, workspaceA.id, () => ({
       plugin: ["keep-a"],
       mcp: { "openwork-cloud": older, posthog: { type: "remote", url: "https://posthog.example/mcp" } },

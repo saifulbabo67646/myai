@@ -10,8 +10,12 @@ describe("OpenWork capabilities knowledge plugin", () => {
     await plugin["experimental.chat.system.transform"]({}, output);
 
     const knowledge = output.system.join("\n");
-    expect(knowledge).toContain("https://api.openworklabs.com/mcp/agent");
-    expect(knowledge).toContain("app.openworklabs.com/api/den");
+    // myai ships no hosted endpoint: the prompt must describe the configured
+    // control plane's path shape and tell the agent to read the host from the
+    // workspace configuration instead of naming a deployment from memory.
+    expect(knowledge).toContain("is the control-plane origin's `/mcp/agent` path");
+    expect(knowledge).toContain("same origin's `/api/den` path is an internal same-origin desktop proxy");
+    expect(knowledge).toContain("never state a host from memory");
     expect(knowledge).toContain("internal same-origin desktop proxy");
     expect(knowledge).toContain("search_capabilities");
     expect(knowledge).toContain("execute_capability");
@@ -32,7 +36,8 @@ describe("OpenWork capabilities knowledge plugin", () => {
     expect(knowledge).toContain("Settings > Debug");
     expect(knowledge).toContain("custom or local MCP server");
     expect(knowledge).not.toContain("Access tokens are opaque");
-    expect(knowledge).not.toContain("https://api.openworklabs.com/mcp`");
+    // No concrete OpenWork-hosted endpoint may ever be baked into the prompt.
+    expect(knowledge).not.toContain("openworklabs.com");
     expect(knowledge).not.toContain("openwork-ui-mcp");
     expect(knowledge).not.toContain("openwork_extensions_export");
   });

@@ -52,8 +52,11 @@ type CloudConfig = {
 const CLIENT_TOKEN = "owt_cloud_mcp_client";
 const HOST_TOKEN = "owt_cloud_mcp_host";
 const APP_HOST_AUTHORIZATION = "Bearer owt_secret_app_host_token";
+/** Administrator-activated control-plane origin used by the reconcile fixtures. */
+const TRUSTED_ORIGIN = "https://den.trusted.example.test";
 const previousRuntimeDb = process.env.OPENWORK_RUNTIME_DB;
 const previousDevMode = process.env.OPENWORK_DEV_MODE;
+const previousBootstrapPath = process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH;
 const stops: Array<() => void | Promise<void>> = [];
 const roots: string[] = [];
 const runtimeDbRoots: string[] = [];
@@ -76,6 +79,8 @@ afterEach(async () => {
   else process.env.OPENWORK_RUNTIME_DB = previousRuntimeDb;
   if (previousDevMode === undefined) delete process.env.OPENWORK_DEV_MODE;
   else process.env.OPENWORK_DEV_MODE = previousDevMode;
+  if (previousBootstrapPath === undefined) delete process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH;
+  else process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = previousBootstrapPath;
 });
 
 async function createRoot(prefix = "openwork-cloud-mcp-"): Promise<string> {
@@ -229,6 +234,18 @@ function workspace(id: string, path: string, baseUrl: string, extra?: Partial<Wo
 async function startOpenwork(workspaces: WorkspaceInfo[]): Promise<{ base: string; config: ServerConfig }> {
   const runtimeRoot = await createRuntimeDbRoot();
   process.env.OPENWORK_RUNTIME_DB = join(runtimeRoot, "runtime.sqlite");
+  // The account-global desired config may only name the origin this install is
+  // activated against (or loopback). myai ships no built-in cloud origin, so
+  // declare the administrator-provisioned control plane the way the desktop
+  // does: a signed activation record already written to the bootstrap file.
+  const bootstrapPath = join(runtimeRoot, "desktop-bootstrap.json");
+  await writeFile(bootstrapPath, JSON.stringify({
+    enterpriseActivation: {
+      activatedAt: "2026-01-01T00:00:00.000Z",
+      denBaseUrl: TRUSTED_ORIGIN,
+    },
+  }));
+  process.env.OPENWORK_DESKTOP_BOOTSTRAP_PATH = bootstrapPath;
   const config: ServerConfig = {
     host: "127.0.0.1",
     port: 0,
@@ -290,7 +307,7 @@ function delivery(body: Record<string, unknown>): Record<string, unknown> {
 
 const CLOUD_CONFIG: CloudConfig = {
   type: "remote",
-  url: "https://api.openworklabs.com/mcp/agent",
+  url: "https://den.trusted.example.test/mcp/agent",
   enabled: true,
   headers: { Authorization: "Bearer owt_secret_cloud_token" },
   oauth: false,
@@ -495,7 +512,7 @@ describe("openwork-cloud MCP strict reconcile", () => {
     const openwork = await startOpenwork([workspace("ws_1", root, `http://127.0.0.1:${mock.server.port}`)]);
 
     const cases: Array<{ config: Record<string, unknown>; code: string }> = [
-      { config: { ...CLOUD_CONFIG, url: "https://api.openworklabs.com/mcp" }, code: "cloud_endpoint_invalid" },
+      { config: { ...CLOUD_CONFIG, url: "https://den.trusted.example.test/mcp" }, code: "cloud_endpoint_invalid" },
       { config: { ...CLOUD_CONFIG, enabled: false }, code: "cloud_mcp_disabled" },
       { config: { ...CLOUD_CONFIG, headers: {} }, code: "invalid_mcp_token" },
       { config: { ...CLOUD_CONFIG, oauth: {} }, code: "invalid_mcp_token" },
@@ -556,7 +573,7 @@ describe("openwork-cloud MCP strict reconcile", () => {
     const openwork = await startOpenwork([workspace("ws_1", root, `http://127.0.0.1:${mock.server.port}`)]);
     await writeRuntimeOpencodeConfig(openwork.config, "ws_1", (current) => ({
       ...current,
-      mcp: { "openwork-cloud": { ...CLOUD_CONFIG, url: "https://api.openworklabs.com/mcp" } },
+      mcp: { "openwork-cloud": { ...CLOUD_CONFIG, url: "https://den.trusted.example.test/mcp" } },
     }));
 
     const body = await responseRecord(await getHealth(openwork.base));
